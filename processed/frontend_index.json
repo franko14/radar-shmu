@@ -1,0 +1,44 @@
+{
+  "description": "Frontend integration index for SHMU radar data",
+  "timestamp": "20250904014500",
+  "products": {
+    "PABV": {
+      "name": "ZMAX",
+      "type": "reflectivity",
+      "units": "dBZ",
+      "description": "Column maximum reflectivity composite",
+      "sample_file": "radar_pabv_20250904014500_sample.json",
+      "grid_size": [1560, 2270],
+      "coverage": "Slovakia and surrounding regions"
+    },
+    "PANV": {
+      "name": "CAPPI 2km",
+      "type": "reflectivity", 
+      "units": "dBZ",
+      "description": "Reflectivity at 2km constant altitude",
+      "sample_file": "radar_panv_20250904014500_sample.json",
+      "grid_size": [1560, 2270],
+      "coverage": "Slovakia and surrounding regions"
+    },
+    "PASV": {
+      "name": "Precipitation",
+      "type": "precipitation",
+      "units": "mm",
+      "description": "1-hour accumulated precipitation",
+      "sample_file": "radar_pasv_20250904014500_sample.json", 
+      "grid_size": [1560, 2270],
+      "coverage": "Slovakia and surrounding regions"
+    }
+  },
+  "api_info": {
+    "projection": "Mercator (+proj=merc +lon_0=18.7)",
+    "coordinate_system": "WGS84",
+    "data_source": "SHMU Slovakia",
+    "extent": [13.6, 23.8, 46.0, 50.7]
+  },
+  "file_info": {
+    "sample_files": "Small 20x20 data subsets (13KB each)",
+    "full_files": "Complete radar data (88MB+ each, excluded from git)",
+    "note": "Use sample files for development, generate full files with radar_processor.py"
+  }
+}

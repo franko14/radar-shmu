@@ -68,7 +68,8 @@ data/*.h5
 
 # Processed data (can be regenerated)
 processed/*.json
-processed/*.png
+!processed/*_sample.json
+!processed/frontend_index.json
 
 # Archive directory
 archive/
