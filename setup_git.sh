@@ -14,13 +14,21 @@ git branch -M main
 git add .
 
 # Initial commit
-git commit -m "Initial commit: SHMU radar data processor MVP
+git commit -m "Initial commit: SHMU radar data processor
 
-- MVP processor for SHMU radar data
-- JavaScript frontend integration
-- Support for ZMAX, CAPPI 2km, and precipitation products  
-- Complete documentation and examples
-- Visualization demos"
+Complete Python toolkit for processing Slovak Hydrometeorological Institute (SHMU) radar data:
+
+✨ Features:
+- Automatic data download from SHMU API
+- HDF5 to JavaScript-ready JSON conversion  
+- Support for ZMAX, CAPPI 2km, and precipitation products
+- Precipitation rate estimation from reflectivity
+- Map visualization examples
+- Complete documentation and usage examples
+
+🎯 Ready for frontend integration with mapping libraries
+📊 Processes multi-radar composite data covering Slovakia region
+⚡ Optimized data structures for web applications"
 
 echo ""
 echo "✅ Git repository initialized successfully!"
