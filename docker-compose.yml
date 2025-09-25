@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  # Main iMeteo Radar service for manual runs
+  imeteo-radar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imeteo-radar:latest
+    container_name: imeteo-radar
+    volumes:
+      - ./outputs:/app/outputs
+      - radar-dwd:/tmp/germany
+      - radar-shmu:/tmp/slovakia
+    environment:
+      - TZ=Europe/Berlin
+    networks:
+      - radar-network
+
+  # DWD fetcher service (runs every 5 minutes)
+  dwd-fetcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imeteo-radar:latest
+    container_name: dwd-fetcher
+    command: sh -c "while true; do imeteo-radar fetch --source dwd; sleep 300; done"
+    volumes:
+      - ./outputs/dwd:/app/outputs
+      - radar-dwd:/tmp/germany
+    environment:
+      - TZ=Europe/Berlin
+    restart: unless-stopped
+    networks:
+      - radar-network
+    profiles:
+      - production
+
+  # SHMU fetcher service (runs every 5 minutes)
+  shmu-fetcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imeteo-radar:latest
+    container_name: shmu-fetcher
+    command: sh -c "while true; do imeteo-radar fetch --source shmu; sleep 300; done"
+    volumes:
+      - ./outputs/shmu:/app/outputs
+      - radar-shmu:/tmp/slovakia
+    environment:
+      - TZ=Europe/Bratislava
+    restart: unless-stopped
+    networks:
+      - radar-network
+    profiles:
+      - production
+
+  # Daily backload service (runs once a day at 1 AM)
+  backloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imeteo-radar:latest
+    container_name: radar-backloader
+    command: |
+      sh -c "while true; do
+        echo 'Starting daily backload at' $$(date);
+        imeteo-radar fetch --source dwd --backload --hours 24;
+        imeteo-radar fetch --source shmu --backload --hours 24;
+        echo 'Backload completed at' $$(date);
+        sleep 86400;
+      done"
+    volumes:
+      - ./outputs:/app/outputs
+      - radar-dwd:/tmp/germany
+      - radar-shmu:/tmp/slovakia
+    environment:
+      - TZ=Europe/Berlin
+    restart: unless-stopped
+    networks:
+      - radar-network
+    profiles:
+      - production
+
+  # Extent generator service (updates extent files daily)
+  extent-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imeteo-radar:latest
+    container_name: extent-generator
+    command: |
+      sh -c "while true; do
+        echo 'Generating extent files at' $$(date);
+        imeteo-radar extent --source all;
+        echo 'Extent generation completed at' $$(date);
+        sleep 86400;
+      done"
+    volumes:
+      - ./outputs:/app/outputs
+      - radar-dwd:/tmp/germany
+      - radar-shmu:/tmp/slovakia
+    environment:
+      - TZ=Europe/Berlin
+    restart: unless-stopped
+    networks:
+      - radar-network
+    profiles:
+      - production
+
+volumes:
+  radar-dwd:
+    name: radar-dwd-data
+  radar-shmu:
+    name: radar-shmu-data
+
+networks:
+  radar-network:
+    name: imeteo-radar-network
+
+# Usage Examples:
+#
+# Build the image:
+#   docker-compose build
+#
+# Run a single command:
+#   docker-compose run --rm imeteo-radar imeteo-radar fetch --source dwd
+#
+# Start all production services:
+#   docker-compose --profile production up -d
+#
+# Start only DWD fetcher:
+#   docker-compose up -d dwd-fetcher
+#
+# Start only SHMU fetcher:
+#   docker-compose up -d shmu-fetcher
+#
+# View logs:
+#   docker-compose logs -f dwd-fetcher
+#   docker-compose logs -f shmu-fetcher
+#
+# Stop all services:
+#   docker-compose --profile production down
+#
+# Clean up everything including volumes:
+#   docker-compose --profile production down -v
