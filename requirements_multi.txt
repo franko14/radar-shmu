@@ -1,0 +1,14 @@
+# Multi-Source Radar Processor Requirements
+
+# Core dependencies
+numpy>=1.20.0
+h5py>=3.0.0
+matplotlib>=3.5.0
+requests>=2.25.0
+
+# Scientific computing
+scipy>=1.7.0
+
+# Optional for better performance
+# pillow>=8.0.0  # For PNG optimization
+# numba>=0.50.0  # For faster computations

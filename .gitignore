@@ -94,3 +94,6 @@ Thumbs.db
 *.bak
 *.swp
 *.log
+
+outputs
+storage

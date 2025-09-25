@@ -1,0 +1,74 @@
+{
+  "metadata": {
+    "title": "Radar Coverage Extents",
+    "description": "Geographic extents and projection information for radar data sources",
+    "version": "1.0",
+    "created": "2025-09-09T10:00:00Z",
+    "coordinate_systems": {
+      "wgs84": "WGS84 geographic coordinates (EPSG:4326)",
+      "mercator": "Web Mercator projection (EPSG:3857)"
+    }
+  },
+  "sources": {
+    "shmu": {
+      "name": "Slovak Hydrometeorological Institute",
+      "country": "Slovakia",
+      "coverage": "Slovakia and surrounding areas",
+      "extent": {
+        "wgs84": {
+          "west": 13.6,
+          "east": 23.8,
+          "south": 46.0,
+          "north": 50.7
+        },
+        "mercator": {
+          "x_min": 1513655.74,
+          "x_max": 2650814.63,
+          "y_min": 5834524.14,
+          "y_max": 6574807.42,
+          "bounds": [1513655.74, 5834524.14, 2650814.63, 6574807.42]
+        }
+      },
+      "projection": "EPSG:3857",
+      "grid_size": [1560, 2270],
+      "resolution_m": [480, 330],
+      "radar_sites": ["CZSKA", "SKJAV", "SKKOJ", "SKLAZ", "SKKUB"]
+    },
+    "dwd": {
+      "name": "German Weather Service",
+      "country": "Germany", 
+      "coverage": "Germany and surrounding areas",
+      "extent": {
+        "wgs84": {
+          "west": 2.5,
+          "east": 18.0,
+          "south": 45.5,
+          "north": 56.0
+        },
+        "mercator": {
+          "x_min": 278306.29,
+          "x_max": 2003750.83,
+          "y_min": 5621521.49,
+          "y_max": 7514065.63,
+          "bounds": [278306.29, 5621521.49, 2003750.83, 7514065.63]
+        }
+      },
+      "projection": "EPSG:3857",
+      "grid_size": [4800, 4400],
+      "resolution_m": [1000, 1000],
+      "radar_network": "DWD national radar network"
+    }
+  },
+  "overlap_region": {
+    "description": "Geographic area covered by both SHMU and DWD radars",
+    "extent": {
+      "wgs84": {
+        "west": 13.6,
+        "east": 18.0,
+        "south": 46.0,
+        "north": 50.7
+      }
+    },
+    "countries": ["Czech Republic", "Eastern Austria", "Southern Germany", "Western Slovakia"]
+  }
+}
