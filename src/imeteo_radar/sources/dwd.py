@@ -8,6 +8,8 @@ Handles downloading and processing of DWD radar composite data.
 import h5py
 import numpy as np
 import requests
+import tempfile
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Union
@@ -15,7 +17,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..core.base import RadarSource, lonlat_to_mercator
 from ..core.projection import projection_handler
-from ..utils.storage import TimePartitionedStorage
 
 class DWDRadarSource(RadarSource):
     """DWD Radar data source implementation"""
@@ -55,9 +56,9 @@ class DWDRadarSource(RadarSource):
                 'description': 'DWD composite product HX'
             }
         }
-        
-        # Initialize time-partitioned storage
-        self.storage = TimePartitionedStorage()
+
+        # Temporary files for current session
+        self.temp_files = {}
         
     def get_available_products(self) -> List[str]:
         """Get list of available DWD radar products"""
@@ -156,7 +157,11 @@ class DWDRadarSource(RadarSource):
         """Generate URL for DWD product"""
         if product not in self.product_mapping:
             raise ValueError(f"Unknown product: {product}")
-            
+
+        # Special case for latest data
+        if timestamp == "LATEST":
+            return f"{self.base_url}/{product}/composite_{product}_LATEST-hd5"
+
         # DWD URL format: composite_{product}_{YYYYMMDD_HHMM}-hd5
         return f"{self.base_url}/{product}/composite_{product}_{timestamp}-hd5"
     
@@ -167,50 +172,60 @@ class DWDRadarSource(RadarSource):
         
         try:
             url = self._get_product_url(timestamp, product)
-            normalized_timestamp = timestamp.replace('_', '') + '00'  # Convert to YYYYMMDDHHMM00 (14-digit)
-            
-            # Check if file already exists in storage
-            existing_files = self.storage.get_files("dwd", product=product)
-            for file_info in existing_files:
-                if file_info['timestamp'] == normalized_timestamp:
-                    return {
-                        'timestamp': normalized_timestamp,
-                        'product': product,
-                        'path': file_info['path'],
-                        'url': url,
-                        'cached': True,
-                        'success': True
-                    }
-            
-            # Download to temporary file first
+            # Download to temporary file
             response = requests.get(url, timeout=30)
             response.raise_for_status()
-            
-            # Create temporary file
-            temp_path = Path(f"/tmp/dwd_{product}_{timestamp}.hdf")
-            temp_path.write_bytes(response.content)
-            
-            # Store in hierarchical structure using existing interface
-            stored_path = self.storage.store_file(
-                file_path=temp_path,
-                timestamp=normalized_timestamp,
-                source="dwd",
-                product=product,
-                metadata={
+
+            # Create a proper temporary file
+            with tempfile.NamedTemporaryFile(suffix=f'_dwd_{product}_{timestamp}.hdf', delete=False) as temp_file:
+                temp_file.write(response.content)
+                temp_path = Path(temp_file.name)
+
+            # Handle LATEST timestamp specially - extract actual timestamp from HDF5 file
+            if timestamp == "LATEST":
+                # Extract actual timestamp from the downloaded HDF5 file
+                try:
+                    with h5py.File(temp_path, 'r') as f:
+                        # Try to get timestamp from ODIM_H5 metadata
+                        if 'what' in f and 'date' in f['what'].attrs and 'time' in f['what'].attrs:
+                            date_str = f['what'].attrs['date']
+                            time_str = f['what'].attrs['time']
+                            if isinstance(date_str, bytes):
+                                date_str = date_str.decode('utf-8')
+                            if isinstance(time_str, bytes):
+                                time_str = time_str.decode('utf-8')
+                            # Convert YYYYMMDD and HHMMSS to our format
+                            normalized_timestamp = f"{date_str}{time_str[:4]}00"
+                        else:
+                            # Fallback to current time if metadata not found
+                            normalized_timestamp = datetime.now().strftime("%Y%m%d%H%M00")
+                except Exception as e:
+                    print(f"⚠️  Could not extract timestamp from LATEST file: {e}")
+                    normalized_timestamp = datetime.now().strftime("%Y%m%d%H%M00")
+            else:
+                normalized_timestamp = timestamp.replace('_', '') + '00'  # Convert to YYYYMMDDHHMM00 (14-digit)
+
+            # Check if we already have this file in current session
+            cache_key = f"{product}_{normalized_timestamp}"
+            if cache_key in self.temp_files and os.path.exists(self.temp_files[cache_key]):
+                # File already downloaded in this session
+                temp_path.unlink()  # Remove the duplicate
+                return {
+                    'timestamp': normalized_timestamp,
+                    'product': product,
+                    'path': self.temp_files[cache_key],
                     'url': url,
-                    'downloaded_at': datetime.now().isoformat(),
-                    'composite_type': product.upper(),
-                    'file_size': len(response.content)
+                    'cached': True,
+                    'success': True
                 }
-            )
-            
-            # Clean up temporary file
-            temp_path.unlink()
-                
+
+            # Store temp file path for this session
+            self.temp_files[cache_key] = str(temp_path)
+
             return {
                 'timestamp': normalized_timestamp,
                 'product': product,
-                'path': str(stored_path),
+                'path': str(temp_path),
                 'url': url,
                 'cached': False,
                 'success': True
@@ -219,11 +234,24 @@ class DWDRadarSource(RadarSource):
         except Exception as e:
             return {'error': str(e), 'timestamp': timestamp, 'product': product, 'success': False}
         
-    def download_latest(self, count: int, products: List[str] = None) -> List[Dict[str, Any]]:
+    def download_latest(self, count: int = 1, products: List[str] = None, use_latest: bool = True) -> List[Dict[str, Any]]:
         """Download latest DWD radar data"""
-        
+
         if products is None:
             products = ['dmax']  # Default to maximum reflectivity
+
+        # If only fetching one file and use_latest is True, use LATEST endpoint
+        if count == 1 and use_latest:
+            print(f"📡 Using LATEST endpoint for most recent data...")
+            downloaded_files = []
+            for product in products:
+                result = self._download_single_file("LATEST", product)
+                if result['success']:
+                    downloaded_files.append(result)
+                    print(f"✅ Downloaded latest {product} data")
+                else:
+                    print(f"❌ Failed to download latest {product}: {result.get('error', 'Unknown error')}")
+            return downloaded_files
             
         print(f"🔍 Finding last {count} available DWD timestamps...")
         

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a multi-source weather radar data processing system that handles SHMU (Slovak) and DWD (German) radar data. The system provides a complete pipeline from raw HDF5 radar data to JavaScript-ready JSON formats for web applications.
+iMeteo Radar is a multi-source weather radar data processing system that handles both DWD (German Weather Service) and SHMU (Slovak Hydrometeorological Institute) radar data. The system downloads ODIM_H5 format radar data, processes it with proper colorscaling and transparency, and exports high-quality PNG images suitable for web mapping applications.
 
 ## 🔧 Development Setup
 
@@ -15,74 +15,90 @@ python >= 3.9
 ### Installation
 
 ```bash
+# Clone repository
+git clone https://github.com/imeteo/imeteo-radar.git
+cd imeteo-radar
+
 # Create virtual environment
 python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate   # Windows
 
 # Install dependencies
-pip install -e ".[dev,performance]"
+pip install -e ".[dev]"
 ```
 
 ### Project Structure
 
 ```
-radar-shmu/
-├── src/radar_shmu/           # Main package
-│   ├── cli.py               # Command-line interface
-│   ├── sources/             # Data source handlers (SHMU, DWD)
-│   ├── processing/          # Data processing modules
-│   ├── core/                # Core functionality
-│   ├── utils/               # Utilities and storage
-│   └── config/              # Configuration and colormaps
-├── scripts/                 # Production scripts
-├── tests/                   # Test suite
-├── config/                  # Configuration files
-└── storage/                 # Time-partitioned data storage
+imeteo-radar/
+├── src/imeteo_radar/        # Main package
+│   ├── cli.py              # Command-line interface
+│   ├── sources/            # Data source handlers
+│   │   ├── dwd.py         # DWD radar source (tempfile-based)
+│   │   └── shmu.py        # SHMU radar source (tempfile-based)
+│   ├── processing/         # Data processing modules
+│   │   └── exporter.py    # PNG export with transparency
+│   ├── core/              # Core functionality
+│   ├── config/            # Configuration
+│   │   └── shmu_colormap.py  # Official SHMU colorscale
+│   └── utils/             # Utilities
+├── scripts/               # Utility scripts
+│   └── generate_colorbar.py  # Colorbar generation
+└── outputs/               # Generated files (PNG, JSON)
 ```
 
 ## ⚡ CLI Commands
 
-The project provides several CLI commands through the `radar-processor` executable:
+The project provides the `imeteo-radar` CLI executable:
 
-### Download Data
+### Fetch Data
 ```bash
-# Download SHMU data (5 recent timestamps)
-radar-processor download --sources shmu --count 5
+# Download latest DWD dmax data
+imeteo-radar fetch --source dwd
 
-# Download from multiple sources
-radar-processor download --sources shmu dwd --count 3 --output outputs/
+# Download latest SHMU zmax data
+imeteo-radar fetch --source shmu
+
+# Download last 6 hours of data
+imeteo-radar fetch --source dwd --backload --hours 6
+
+# Download specific time range
+imeteo-radar fetch --source shmu --backload --from "2024-09-25 10:00" --to "2024-09-25 16:00"
+
+# Custom output directory
+imeteo-radar fetch --source dwd --output /data/radar/
+
+# Force update extent information
+imeteo-radar fetch --source shmu --update-extent
 ```
 
-### Merge Data Sources
+### Generate Extent Information
 ```bash
-# Merge SHMU and DWD data for matching timestamps
-radar-processor merge --output storage/merged/
+# Generate extent files for all sources
+imeteo-radar extent --source all
+
+# Generate extent for specific source
+imeteo-radar extent --source dwd
 ```
 
-### Create Animations
-```bash
-# Generate animated GIFs from time series data
-radar-processor animate --input storage/merged/ --output animations/
-```
-
-## 📝 Production Scripts
-
-Located in `scripts/` directory:
-
-- `download_matching_data.py` - Download synchronized data from multiple sources
-- `create_production_merged.py` - Generate production-ready merged datasets
-- `generate_animations.py` - Create time-lapse animations
-- `generate_production_indexes.py` - Build metadata indexes
-
-### Example Usage
-```bash
-# Download matched data
-PYTHONPATH=src ./.venv/bin/python scripts/download_matching_data.py --count 10 --output outputs/
-
-# Create production merged data
-PYTHONPATH=src ./.venv/bin/python scripts/create_production_merged.py
-```
+### Key Features
+- **DWD Support**:
+  - Uses LATEST endpoint for real-time data
+  - dmax product (maximum reflectivity composite)
+  - Coverage: Germany and surrounding areas
+- **SHMU Support**:
+  - zmax product (maximum reflectivity)
+  - Coverage: Slovakia and surrounding areas
+- **Data Processing**:
+  - Temporary file processing (no permanent raw storage)
+  - Transparent backgrounds for no-data areas
+  - Official SHMU colorscale (-35 to 85 dBZ)
+  - Proper nodata handling (255 for uint8)
+- **Output**:
+  - PNG format: `YYYY-MM-dd_HHMM.png`
+  - Default: `/tmp/germany/` (DWD), `/tmp/slovakia/` (SHMU)
+  - Automatic extent_index.json generation
 
 ## 🧪 Testing
 
@@ -94,86 +110,109 @@ pytest
 pytest --cov=src --cov-report=html
 
 # Run specific test
-PYTHONPATH=src ./.venv/bin/python tests/test_colormap.py
+pytest tests/test_dwd.py
 ```
 
 ## 📊 Data Processing Pipeline
 
-1. **Download**: Fetch HDF5 files from SHMU/DWD APIs
-2. **Process**: Convert HDF5 to structured arrays with proper scaling
-3. **Merge**: Combine multi-source data for overlapping regions
-4. **Export**: Generate JSON/visualization outputs
-5. **Store**: Time-partitioned storage system for efficient access
+1. **Download**: Fetch HDF5 files from DWD/SHMU APIs to temp files
+2. **Process**: Convert HDF5 to arrays with proper scaling
+3. **Export**: Generate PNG images with transparency
+4. **Cleanup**: Automatic removal of temporary HDF5 files
 
 ## 🎨 Visualization
 
-The system includes built-in colormaps and visualization tools:
-- SHMU standard colormap for reflectivity data
-- Automatic precipitation rate estimation (Z-R relationship)
-- PNG export with proper scaling and legends
+- **Colormap**: Official SHMU colorscale (-35 to 85 dBZ)
+- **PNG Export**: High-quality images with alpha channel
+- **Transparency**: No-data areas are fully transparent
+- **Colorbar Generation**: Standalone colorbars for web overlays
+  ```bash
+  python scripts/generate_colorbar.py --generate-all
+  ```
 
 ## ⚠️ Important Notes
 
-- Large file sizes: JSON outputs can be ~90MB each
-- Memory usage: Processing requires significant RAM for large datasets
-- API limits: Respect source API rate limits during downloads
-- Coordinate systems: Data uses Mercator projection (+proj=merc +lon_0=18.7)
+- **Data Format**: ODIM_H5 compliant HDF5 files
+- **Time Resolution**: 5-minute intervals
+- **Temporary Files**: Uses system temp directory, auto-cleanup
+- **No Permanent Storage**: Raw HDF5 files are not kept
+- **Projections**:
+  - DWD: Stereographic projection
+  - SHMU: Web Mercator (EPSG:3857)
 
 ## 🔍 Code Quality
 
 The project uses strict code quality tools:
 - **Black**: Code formatting (88 char line length)
 - **isort**: Import sorting
-- **mypy**: Static type checking (strict mode)
+- **mypy**: Static type checking
 - **flake8**: Linting
-- **pytest**: Testing with 80% coverage requirement
+- **pytest**: Testing
 
 Run quality checks:
 ```bash
-black src/ tests/
-isort src/ tests/
+black src/
+isort src/
 mypy src/
-flake8 src/ tests/
+flake8 src/
 ```
 
 ## 📦 Package Configuration
 
 Defined in `pyproject.toml`:
-- Core dependencies: numpy, h5py, matplotlib, requests
-- Optional performance: numba for acceleration
-- Development tools: pytest, black, mypy, etc.
-- CLI entry points: `radar-processor`, `radar-download`, etc.
+- Package name: `imeteo-radar`
+- Core dependencies: numpy, h5py, matplotlib, requests, PIL, opencv-python
+- CLI entry point: `imeteo-radar`
+- Version: 1.0.0
 
 ## 🚀 Production Deployment
 
 For production use:
-1. Install with performance dependencies: `pip install ".[performance]"`
-2. Configure time-partitioned storage (see STORAGE_STRATEGY.md)
-3. Set up automated data downloads via cron/scheduler
-4. Monitor disk usage and implement cleanup policies
-5. Consider data compression (gzip) for web delivery
+1. Install package: `pip install .`
+2. Set up automated data downloads via cron/scheduler
+3. Configure output directories with sufficient space
+4. Note: Raw data uses temp files only, no cleanup needed
+
+### Example Cron Setup
+```bash
+# Fetch latest DWD radar data every 5 minutes
+*/5 * * * * imeteo-radar fetch --source dwd >> /var/log/radar-dwd.log 2>&1
+
+# Fetch latest SHMU radar data every 5 minutes
+*/5 * * * * imeteo-radar fetch --source shmu >> /var/log/radar-shmu.log 2>&1
+
+# Daily backload of previous day (both sources)
+0 1 * * * imeteo-radar fetch --source dwd --backload --hours 24 >> /var/log/radar-backload.log 2>&1
+0 1 * * * imeteo-radar fetch --source shmu --backload --hours 24 >> /var/log/radar-backload.log 2>&1
+```
 
 ## 🔗 Integration Examples
 
 ### Python API
 ```python
-from radar_shmu.sources import SHMUSource
-from radar_shmu.processing import RadarProcessor
+from imeteo_radar.sources.dwd import DWDRadarSource
+from imeteo_radar.sources.shmu import SHMURadarSource
+from imeteo_radar.processing.exporter import PNGExporter
 
-source = SHMUSource()
-processor = RadarProcessor()
+# Initialize sources
+dwd_source = DWDRadarSource()
+shmu_source = SHMURadarSource()
+exporter = PNGExporter()
 
-# Download and process
-data = source.download_latest()
-processed = processor.process(data)
+# Download latest DWD
+dwd_files = dwd_source.download_latest(count=1, products=['dmax'])
+
+# Download latest SHMU
+shmu_files = shmu_source.download_latest(count=1, products=['zmax'])
+
+# Process and export
+for file_info in dwd_files:
+    data = dwd_source.process_to_array(file_info['path'])
+    exporter.export_png(data, 'output.png')
 ```
 
-### JavaScript/Web
-```javascript
-// Load processed JSON data
-fetch('outputs/radar_merged_20250909120000.json')
-  .then(response => response.json())
-  .then(data => {
-    // Use data.reflectivity, data.coordinates, etc.
-  });
-```
+### Web Integration
+The exported PNG files can be directly used in web applications:
+- Files are named with timestamps: `2024-09-25_14:30.png`
+- Can be served as static files or overlays on web maps
+- Compatible with Leaflet, OpenLayers, and other mapping libraries

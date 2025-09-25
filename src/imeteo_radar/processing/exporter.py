@@ -58,37 +58,37 @@ class PNGExporter:
             raise RuntimeError(f"Failed to load SHMU colormap: {e}. "
                               "shmu_colormap.py must be available as single source of truth.")
             
-        # For precipitation data, derive colormap from SHMU base but use appropriate colors
-        # Still maintaining SHMU as the single source principle
-        try:
-            from shmu_colormap import get_dbz_range
-            min_dbz, max_dbz = get_dbz_range()
-            
-            # Create precipitation colormap based on SHMU principles
-            precip_colors = [
-                '#FFFFFF',  # White (no precip)
-                '#E0E0FF',  # Very light blue
-                '#B0B0FF',  # Light blue
-                '#8080FF',  # Blue
-                '#4040FF',  # Medium blue
-                '#0000FF',  # Dark blue
-                '#00FF00',  # Green
-                '#80FF00',  # Yellow-green
-                '#FFFF00',  # Yellow
-                '#FFA500',  # Orange
-                '#FF0000'   # Red
-            ]
-            
-            precip_bounds = np.array([0, 0.1, 0.5, 1, 2, 5, 10, 20, 40, 80, 160])
-            colormaps['precipitation'] = {
-                'colormap': ListedColormap(precip_colors),
-                'norm': BoundaryNorm(precip_bounds, len(precip_colors)),
-                'units': 'mm',
-                'range': [0, 160]
-            }
-            
-        except Exception as e:
-            print(f"⚠️  Warning: Could not create precipitation colormap: {e}")
+        # Precipitation colormap not needed for current implementation (only using dBZ data)
+        # Commenting out to avoid unnecessary warnings
+        # try:
+        #     from shmu_colormap import get_dbz_range
+        #     min_dbz, max_dbz = get_dbz_range()
+        #
+        #     # Create precipitation colormap based on SHMU principles
+        #     precip_colors = [
+        #         '#FFFFFF',  # White (no precip)
+        #         '#E0E0FF',  # Very light blue
+        #         '#B0B0FF',  # Light blue
+        #         '#8080FF',  # Blue
+        #         '#4040FF',  # Medium blue
+        #         '#0000FF',  # Dark blue
+        #         '#00FF00',  # Green
+        #         '#80FF00',  # Yellow-green
+        #         '#FFFF00',  # Yellow
+        #         '#FFA500',  # Orange
+        #         '#FF0000'   # Red
+        #     ]
+        #
+        #     precip_bounds = np.array([0, 0.1, 0.5, 1, 2, 5, 10, 20, 40, 80, 160])
+        #     colormaps['precipitation'] = {
+        #         'colormap': ListedColormap(precip_colors),
+        #         'norm': BoundaryNorm(precip_bounds, len(precip_colors)),
+        #         'units': 'mm',
+        #         'range': [0, 160]
+        #     }
+        #
+        # except Exception as e:
+        #     print(f"⚠️  Warning: Could not create precipitation colormap: {e}")
         
         return colormaps
         
@@ -142,21 +142,26 @@ class PNGExporter:
             
             # Plot image using colormap directly (like your example code)
             plot_extent = self._get_plot_extent(radar_data, extent)
+
+            # Mask values below minimum threshold as NaN for transparency
+            data_masked = data.copy()
+            min_threshold = cmap_info.get('range', [-35, 85])[0]
+            data_masked[data < min_threshold] = np.nan
+
+            # Create colormap copy with transparency for NaN/bad values
+            cmap_copy = cmap_info['colormap'].copy()
+            cmap_copy.set_bad(alpha=0)  # Make NaN values transparent
+            cmap_copy.set_under(alpha=0)  # Make below-threshold values transparent
+
             im = ax.imshow(
-                data,  # Use original data, not pre-colored
+                data_masked,  # Use masked data
                 extent=tuple(plot_extent),
                 origin='upper',
                 interpolation='nearest',
-                cmap=cmap_info['colormap'],  # Let imshow apply the colormap
+                cmap=cmap_copy,  # Use colormap with transparency
                 norm=cmap_info['norm'],      # Use the discrete normalization
                 aspect='auto'
             )
-            
-            # Handle transparency by setting bad values (NaN) to be transparent
-            if transparent_background:
-                cmap_copy = cmap_info['colormap'].copy()
-                cmap_copy.set_bad(alpha=0)  # Make NaN values transparent
-                im.set_cmap(cmap_copy)
             
             # Save with transparency
             plt.savefig(

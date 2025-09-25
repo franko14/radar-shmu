@@ -9,13 +9,13 @@ import os
 import h5py
 import numpy as np
 import requests
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..core.base import RadarSource, RadarData, lonlat_to_mercator
-from ..utils.storage import TimePartitionedStorage
 
 class SHMURadarSource(RadarSource):
     """SHMU Radar data source implementation"""
@@ -56,12 +56,8 @@ class SHMURadarSource(RadarSource):
             }
         }
         
-        # Time-partitioned storage (new optimized storage)
-        self.storage = TimePartitionedStorage("storage")
-        
-        # Legacy cache directory (for migration)
-        self.cache_dir = Path("processed/shmu_hdf_data")
-        self._migrated = False  # Track if migration completed
+        # Track temporary files for cleanup
+        self.temp_files = {}
         
     def get_available_products(self) -> List[str]:
         """Get list of available SHMU radar products"""
@@ -127,122 +123,69 @@ class SHMURadarSource(RadarSource):
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
             return {'error': f"Unknown product: {product}", 'timestamp': timestamp, 'product': product, 'success': False}
-        
+
         try:
-            self._ensure_storage_ready()
-            
-            # Check if file exists in new storage first
-            existing_files = self.storage.get_files(
-                source="shmu", 
-                start_time=timestamp, 
-                end_time=timestamp, 
-                product=product
-            )
-            
-            if existing_files:
-                existing_file = existing_files[0]
+            # Check if we've already downloaded this file in this session
+            cache_key = f"{timestamp}_{product}"
+            if cache_key in self.temp_files:
                 return {
                     'timestamp': timestamp,
                     'product': product,
-                    'path': existing_file['path'],
+                    'path': self.temp_files[cache_key],
                     'url': self._get_product_url(timestamp, product),
                     'cached': True,
                     'success': True
                 }
-            
-            # Download to temporary location
+
+            # Download to temporary file
             url = self._get_product_url(timestamp, product)
-            filename = f"T_{self.product_mapping[product]}22_C_LZIB_{timestamp}.hdf"
-            temp_filepath = Path(f"/tmp/{filename}")
-            
-            # Download
-            response = requests.get(url, timeout=30, verify=False)
-            response.raise_for_status()
-            
-            # Save temporarily
-            with open(temp_filepath, 'wb') as f:
-                f.write(response.content)
-            
-            # Store in time-partitioned storage
-            stored_path = self.storage.store_file(
-                temp_filepath, timestamp, "shmu", product,
-                metadata={
-                    'url': url,
-                    'downloaded_at': datetime.now().isoformat(),
-                    'composite_type': self.product_mapping[product],
-                    'file_size': temp_filepath.stat().st_size
-                }
-            )
-            
-            # Clean up temp file
-            temp_filepath.unlink()
-                
+
+            # Create a proper temporary file
+            with tempfile.NamedTemporaryFile(suffix=f'_shmu_{product}_{timestamp}.hdf', delete=False) as temp_file:
+                # Download directly to temp file
+                response = requests.get(url, timeout=30, verify=False)
+                response.raise_for_status()
+
+                temp_file.write(response.content)
+                temp_path = Path(temp_file.name)
+
+            # Track the temporary file
+            self.temp_files[cache_key] = str(temp_path)
+
             return {
                 'timestamp': timestamp,
-                'product': product, 
-                'path': str(stored_path),
+                'product': product,
+                'path': str(temp_path),
                 'url': url,
                 'cached': False,
                 'success': True
             }
-            
+
         except Exception as e:
             return {'error': str(e), 'timestamp': timestamp, 'product': product, 'success': False}
         
     def download_latest(self, count: int, products: List[str] = None) -> List[Dict[str, Any]]:
         """Download latest SHMU radar data"""
-        
+
         if products is None:
             products = ['zmax', 'cappi2km']  # Default products
-            
+
         print(f"🔍 Finding last {count} available SHMU timestamps...")
-        
-        # First check for cached files
-        cached_files = []
-        for file_path in self.cache_dir.glob("*.hdf"):
-            # Parse timestamp from filename: T_PABV22_C_LZIB_20250905153500.hdf
-            filename = file_path.name
-            if '_' in filename and filename.endswith('.hdf'):
-                try:
-                    timestamp_part = filename.split('_')[-1].replace('.hdf', '')
-                    if len(timestamp_part) == 14 and timestamp_part.isdigit():
-                        cached_files.append((timestamp_part, file_path))
-                except:
-                    continue
-        
-        # Sort by timestamp (newest first) and extract unique timestamps
-        cached_files.sort(key=lambda x: x[0], reverse=True)
-        cached_timestamps = []
-        for timestamp, _ in cached_files:
-            if timestamp not in cached_timestamps:
-                cached_timestamps.append(timestamp)
-                if len(cached_timestamps) >= count:
-                    break
-        
-        # Strategy 1: Check for current timestamps online first
+
+        # Strategy: Check for current timestamps online
         print(f"🌐 Checking SHMU server for current timestamps...")
         test_timestamps = self._generate_timestamps(count * 4)  # Generate more candidates
         available_timestamps = []
-        
+
         for timestamp in test_timestamps:
             if len(available_timestamps) >= count:
                 break
-                
+
             # Test with zmax (most reliable product)
             if self._check_timestamp_availability(timestamp, 'zmax'):
                 available_timestamps.append(timestamp)
                 print(f"✅ Found current: {timestamp}")
-        
-        # Strategy 2: Add cached timestamps if we need more
-        if len(available_timestamps) < count and cached_timestamps:
-            print(f"📁 Adding cached timestamps...")
-            for cached_ts in cached_timestamps:
-                if cached_ts not in available_timestamps:
-                    available_timestamps.append(cached_ts)
-                    print(f"✅ Found cached: {cached_ts}")
-                    if len(available_timestamps) >= count:
-                        break
-                        
+
         if not available_timestamps:
             print("❌ No available timestamps found")
             return []
@@ -308,12 +251,17 @@ class SHMURadarSource(RadarSource):
                 offset = what_attrs.get('offset', 0.0)
                 nodata = what_attrs.get('nodata', -32768)
                 undetect = what_attrs.get('undetect', 0)
-                
+
                 # Scale data
                 scaled_data = data.astype(np.float32) * gain + offset
-                
+
                 # Handle special values
-                scaled_data[data == nodata] = np.nan
+                # For SHMU uint8 data, 255 is the actual nodata marker (max uint8 value)
+                # The nodata attribute value of -1 is impossible for uint8
+                if data.dtype == np.uint8:
+                    scaled_data[data == 255] = np.nan  # 255 is nodata for uint8
+                else:
+                    scaled_data[data == nodata] = np.nan
                 scaled_data[data == undetect] = np.nan
                 
                 # Create coordinate arrays
@@ -402,16 +350,3 @@ class SHMURadarSource(RadarSource):
             'resolution_m': [480, 330]  # [y_res, x_res] approximately
         }
         
-    def _migrate_legacy_cache(self):
-        """Migrate existing cache files to time-partitioned storage"""
-        if self._migrated or not self.cache_dir.exists():
-            return
-            
-        print(f"📦 Migrating SHMU cache from {self.cache_dir} to time-partitioned storage...")
-        self.storage.migrate_existing_data(self.cache_dir, "shmu")
-        self._migrated = True
-        
-    def _ensure_storage_ready(self):
-        """Ensure storage is ready (migrate if needed)"""
-        if not self._migrated and self.cache_dir.exists():
-            self._migrate_legacy_cache()
