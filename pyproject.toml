@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "radar-shmu"
+name = "imeteo-radar"
 version = "1.0.0"
-description = "Multi-source radar data processor for SHMU and DWD weather radar data"
+description = "Weather radar data processor for DWD and SHMU weather radar data"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -57,23 +57,20 @@ performance = [
 all = ["radar-shmu[dev,performance]"]
 
 [project.scripts]
-radar-processor = "radar_shmu.cli:main"
-radar-download = "radar_shmu.cli:download_command"
-radar-merge = "radar_shmu.cli:merge_command"
-radar-animate = "radar_shmu.cli:animate_command"
+imeteo-radar = "imeteo_radar.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/radar-processing/radar-shmu"
-Documentation = "https://radar-shmu.readthedocs.io/"
-Repository = "https://github.com/radar-processing/radar-shmu"
-Issues = "https://github.com/radar-processing/radar-shmu/issues"
+Homepage = "https://github.com/imeteo/imeteo-radar"
+Documentation = "https://imeteo-radar.readthedocs.io/"
+Repository = "https://github.com/imeteo/imeteo-radar"
+Issues = "https://github.com/imeteo/imeteo-radar/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["radar_shmu*"]
+include = ["imeteo_radar*"]
 
 [tool.setuptools.package-data]
-"radar_shmu" = ["config/*.json", "colormaps/*.py"]
+"imeteo_radar" = ["config/*.json", "colormaps/*.py"]
 
 # Black code formatter
 [tool.black]
@@ -96,7 +93,7 @@ extend-exclude = '''
 [tool.isort]
 profile = "black"
 src_paths = ["src", "tests"]
-known_first_party = ["radar_shmu"]
+known_first_party = ["imeteo_radar"]
 multi_line_output = 3
 line_length = 88
 

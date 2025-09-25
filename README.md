@@ -1,177 +1,188 @@
-# SHMU Radar Data Processor - MVP
+# iMeteo Radar
 
-Minimal Viable Product for processing Slovak Hydrometeorological Institute (SHMU) radar data and preparing it for JavaScript frontend consumption.
+Weather radar data processor for DWD (German Weather Service) and SHMU (Slovak Hydrometeorological Institute) radar data. Provides high-quality radar imagery with transparent backgrounds and proper colorscaling.
 
 ## 🚀 Quick Start
 
 ```bash
-# Run the MVP processor
-python radar_processor.py
+# Install
+pip install -e .
 
-# Create visualizations  
-python simple_demo.py
+# Fetch latest DWD radar data (Germany)
+imeteo-radar fetch --source dwd
+
+# Fetch latest SHMU radar data (Slovakia)
+imeteo-radar fetch --source shmu
+
+# Fetch last 6 hours of data
+imeteo-radar fetch --source dwd --backload --hours 6
+
+# Specify custom output directory
+imeteo-radar fetch --source shmu --output /path/to/output/
+
+# Generate extent information
+imeteo-radar extent --source all
 ```
 
-## 📁 MVP File Structure
+## 📦 Installation
 
-```
-radar/
-├── README.md                    # This file
-├── DOCUMENTATION.md             # Complete documentation
-├── radar_processor.py           # Main MVP processor
-├── simple_demo.py               # Simple visualization demo
-├── sample_data.json             # Data structure examples
-├── processed/                   # Processed radar data
-│   ├── frontend_index.json     # Frontend integration index
-│   ├── radar_*.json            # Individual product data  
-│   └── simple_*.png            # Sample visualizations
-├── data/                        # Downloaded HDF5 files (temporary)
-└── archive/                     # Non-MVP analysis files
+```bash
+# Clone repository
+git clone https://github.com/imeteo/imeteo-radar.git
+cd imeteo-radar
+
+# Install in editable mode (for development)
+pip install -e .
+
+# Or install directly
+pip install .
 ```
 
-## 🎯 Key Features
+## 🎯 Features
 
-### 1. Automatic Data Processing
-- Downloads SHMU radar data from official API
-- Processes HDF5 files with proper scaling and coordinate transformation
-- Converts to JavaScript-ready JSON format
+- **Multi-source support**: DWD (Germany) and SHMU (Slovakia)
+- **Products**: DWD dmax and SHMU zmax (maximum reflectivity)
+- **PNG export**: High-quality PNG images with transparent backgrounds
+- **Proper nodata handling**: Transparent areas for no-data regions
+- **SHMU colormap**: Official SHMU colorscale for consistent visualization
+- **Backload support**: Fetch historical data with flexible time ranges
+- **LATEST endpoint**: Optimized endpoint for most recent DWD data
+- **Temporary file processing**: Uses system temp files, no permanent raw data storage
+- **Extent information**: Automatic geographic extent metadata generation
+- **Colorbar generation**: Standalone colorbars for web overlay use
 
-### 2. Multiple Radar Products
-- **ZMAX**: Column maximum reflectivity for precipitation intensity
-- **CAPPI 2km**: Horizontal reflectivity at 2km altitude  
-- **Precipitation**: Direct 1-hour accumulated precipitation
+## 📡 CLI Usage
 
-### 3. Frontend Integration
-- Clean JSON data structure optimized for web consumption
-- Coordinate arrays for mapping libraries
-- Metadata and projection information included
+### Generate Extent Information
 
-## 📊 Sample Data Structure
+```bash
+# Generate extent information for all sources
+imeteo-radar extent --source all
 
-```json
-{
-  "product_name": {"name": "ZMAX", "description": "Column Maximum Reflectivity"},
-  "timestamp": "20250904014500", 
-  "extent": [13.6, 23.8, 46.0, 50.7],
-  "data": [[...], [...], ...],
-  "coordinates": {
-    "lons": [...],
-    "lats": [...]
-  },
-  "units": "dBZ",
-  "data_range": [-24.47, 95.50]
-}
+# Generate extent for specific source
+imeteo-radar extent --source dwd
+
+# Custom output directory
+imeteo-radar extent --source shmu --output /data/extents/
 ```
 
-## 🔧 Usage Examples
+Extent files are automatically created on first fetch in `/tmp/{country}/extent_index.json`
 
-### Process New Data
-```python
-from radar_processor import SHMURadarProcessor
+### Fetch Latest Data
 
-processor = SHMURadarProcessor()
+```bash
+# Download latest DWD radar data (Germany)
+imeteo-radar fetch --source dwd
+# Output: /tmp/germany/2024-09-25_1430.png
 
-# Process specific timestamp
-results = processor.process_multiple_products("20250904014500")
-
-# Access processed data
-zmax_data = results['PABV']  # Maximum reflectivity
-cappi_data = results['PANV'] # CAPPI 2km  
-precip_data = results['PASV'] # Precipitation
+# Download latest SHMU radar data (Slovakia)
+imeteo-radar fetch --source shmu
+# Output: /tmp/slovakia/2024-09-25_1430.png
 ```
 
-### Precipitation Rate Estimation
-```python
-# Automatic Z-R conversion for reflectivity products
-if 'precipitation_rate' in zmax_data:
-    precip_rate = zmax_data['precipitation_rate']['data']
-    print(f"Max precipitation: {max(precip_rate)} mm/h")
+### Backload Historical Data
+
+```bash
+# Last 6 hours for DWD
+imeteo-radar fetch --source dwd --backload --hours 6
+
+# Last 3 hours for SHMU
+imeteo-radar fetch --source shmu --backload --hours 3
+
+# Specific time range
+imeteo-radar fetch --source dwd --backload --from "2024-09-25 10:00" --to "2024-09-25 16:00"
+
+# Custom output directory
+imeteo-radar fetch --source shmu --output /data/radar/ --backload --hours 12
+
+# Force update extent information
+imeteo-radar fetch --source dwd --update-extent
 ```
 
-## 🌐 JavaScript Integration
+## 🎨 Generate Colorbars
 
-### Load Data
-```javascript
-fetch('processed/radar_pabv_20250904014500.json')
-  .then(response => response.json())
-  .then(radarData => {
-    // Use radarData.data for visualization
-    // Use radarData.coordinates for mapping
-  });
+```bash
+# Generate single colorbar
+python scripts/generate_colorbar.py --output colorbar.png
+
+# Generate all web variants (vertical, horizontal, mobile, retina)
+python scripts/generate_colorbar.py --generate-all
+
+# Custom colorbar
+python scripts/generate_colorbar.py \
+  --orientation horizontal \
+  --width 5 --height 0.8 \
+  --dpi 200
 ```
 
-### Map Integration (Leaflet.js example)
-```javascript
-// Create heatmap from radar data
-const heatmapData = [];
-for (let i = 0; i < radarData.dimensions[0]; i++) {
-  for (let j = 0; j < radarData.dimensions[1]; j++) {
-    const value = radarData.data[i][j];
-    if (value !== null) {
-      heatmapData.push([
-        radarData.coordinates.lats[i],
-        radarData.coordinates.lons[j], 
-        value
-      ]);
-    }
-  }
-}
+## 📁 Project Structure
 
-const heatLayer = L.heatLayer(heatmapData).addTo(map);
+```
+imeteo-radar/
+├── src/imeteo_radar/        # Main package
+│   ├── cli.py              # Command-line interface
+│   ├── sources/            # Data source handlers
+│   │   ├── dwd.py         # DWD radar source (tempfile-based)
+│   │   └── shmu.py        # SHMU radar source (tempfile-based)
+│   ├── processing/         # Data processing modules
+│   │   └── exporter.py    # PNG export with transparency
+│   ├── core/              # Core functionality
+│   ├── config/            # Configuration
+│   │   └── shmu_colormap.py  # Official SHMU colorscale
+│   └── utils/             # Utilities
+├── scripts/               # Utility scripts
+│   └── generate_colorbar.py  # Colorbar generation
+├── pyproject.toml          # Package configuration
+└── README.md              # This file
 ```
 
-## 📈 Data Specifications
+## 🛠️ Development
 
-- **Coverage**: Slovakia and surrounding areas (13.6°-23.8°E, 46.0°-50.7°N)
-- **Resolution**: ~330m × 480m (2270 × 1560 pixels)
-- **Projection**: Mercator (+proj=merc +lon_0=18.7)
-- **Update Frequency**: Every 5 minutes (operational)
-- **Data Source**: Multi-radar composite (5 radar stations)
+```bash
+# Install with development dependencies
+pip install -e ".[dev]"
 
-## ⚡ Performance Notes
+# Run tests
+pytest
 
-- JSON files are large (~90MB each for reflectivity products)
-- Consider implementing data compression (gzip) for production
-- Spatial downsampling recommended for web display
-- Processed data includes coordinate arrays for efficient mapping
+# Code formatting
+black src/
+isort src/
+```
 
-## 🔗 API Information
+## 📊 Data Format
 
-**Base URL**: `https://opendata.shmu.sk/meteorology/weather/radar/composite/skcomp/`
+### Output Files
 
-**Products Available**:
-- `zmax/` - Maximum reflectivity (ZMAX)
-- `cappi2km/` - CAPPI 2km reflectivity  
-- `pac01/` - 1-hour accumulated precipitation
-- `etop/` - Echo top heights
+- **PNG Images**: `YYYY-MM-dd_HHMM.png` format with transparent backgrounds
+- **Extent JSON**: `extent_index.json` with geographic bounds and projection info
+- **Temporary Processing**: HDF5 files processed via tempfile, no permanent storage
 
-**URL Format**: `{base_url}/{product}/{yyyymmdd}/T_{TYPE}22_C_LZIB_{yyyymmddHHMMSS}.hdf`
+### Data Specifications
 
-## 📝 Complete Documentation
+- **DWD dmax**: Maximum reflectivity composite (Germany)
+  - Coverage: ~45.7°N to 56.2°N, 1.5°E to 18.7°E
+  - Resolution: 4800×4400 pixels
+  - Projection: Stereographic
 
-See [DOCUMENTATION.md](DOCUMENTATION.md) for:
-- Complete API documentation
-- Advanced usage examples  
-- Technical specifications
-- Best practices for production deployment
+- **SHMU zmax**: Maximum reflectivity composite (Slovakia)
+  - Coverage: 46.0°N to 50.7°N, 13.6°E to 23.8°E
+  - Resolution: 1560×2270 pixels
+  - Projection: Web Mercator (EPSG:3857)
 
-## 🏗️ Next Steps
+- **Update Frequency**: 5-minute intervals
+- **Colormap**: Official SHMU colorscale (-35 to 85 dBZ)
+- **Nodata Handling**: Transparent pixels for areas without radar coverage
 
-1. **Optimize for Production**:
-   - Implement data compression
-   - Add spatial downsampling options
-   - Create tiled data structure for large datasets
+## 🔗 Data Sources
 
-2. **Enhanced Features**:
-   - Real-time data streaming
-   - Animation support for time series
-   - Quality control indicators
+- **DWD OpenData**: https://opendata.dwd.de/weather/radar/composite/
+- **SHMU OpenData**: https://opendata.shmu.sk/
 
-3. **Frontend Improvements**:
-   - WebGL-based rendering for performance
-   - Custom color scales
-   - Interactive controls for data exploration
+## 📝 License
 
----
+MIT
 
-*This MVP provides a complete workflow from SHMU radar data to JavaScript-ready formats, enabling rapid development of web-based weather visualization applications.*
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
