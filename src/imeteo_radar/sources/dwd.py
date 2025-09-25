@@ -24,7 +24,7 @@ class DWDRadarSource(RadarSource):
     def __init__(self):
         super().__init__("dwd")
         self.base_url = "https://opendata.dwd.de/weather/radar/composite"
-        
+
         # DWD product mapping (to be verified)
         self.product_mapping = {
             'dmax': 'dmax',      # Maximum reflectivity (equivalent to SHMU's ZMAX)
@@ -539,3 +539,19 @@ class DWDRadarSource(RadarSource):
                     print(f"{indent}{key} (dataset): shape={getattr(value, 'shape', '?')}")
         except Exception as e:
             print(f"  Error printing structure: {e}")
+
+    def cleanup_temp_files(self):
+        """Clean up all temporary files created during this session"""
+        cleaned_count = 0
+        for cache_key, file_path in list(self.temp_files.items()):
+            try:
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+                    cleaned_count += 1
+                del self.temp_files[cache_key]
+            except Exception as e:
+                print(f"⚠️  Could not delete temp file {file_path}: {e}")
+
+        if cleaned_count > 0:
+            print(f"🧹 Cleaned up {cleaned_count} temporary DWD files")
+        return cleaned_count

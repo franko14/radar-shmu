@@ -51,11 +51,20 @@ python scripts/generate_colorbar.py --generate-all
 ## 🐳 Docker
 
 ```bash
-# Run single command
-docker run --rm -v /tmp:/tmp imeteo-radar imeteo-radar fetch --source dwd
+# Export to local directories (files appear directly on host)
+mkdir -p ~/radar-output/germany ~/radar-output/slovakia
+docker run --rm -v ~/radar-output/germany:/tmp/germany -v ~/radar-output/slovakia:/tmp/slovakia \
+  imeteo-radar imeteo-radar fetch --source dwd
 
-# Start production services (auto-fetch every 5 min)
-docker-compose --profile production up -d
+  docker run --rm -v /tmp/germany:/tmp/germany -v /tmp/slovakia:/tmp/slovakia \
+  imeteo-radar imeteo-radar fetch --source dwd
+
+# Simpler: mount parent directory
+docker run --rm -v ~/radar-output:/tmp imeteo-radar imeteo-radar fetch --source shmu
+
+# Start production services (auto-fetch every 5 min to local dirs)
+# Set output directory via RADAR_OUTPUT_DIR env variable or .env file
+RADAR_OUTPUT_DIR=~/my-radar-data docker-compose --profile production up -d
 
 # Services: dwd-fetcher, shmu-fetcher, backloader, extent-generator
 docker-compose logs -f dwd-fetcher

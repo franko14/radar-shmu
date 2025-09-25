@@ -269,6 +269,9 @@ def fetch_command(args) -> int:
                     print(f"⚠️  Failed to process {file_info['timestamp']}: {e}")
                     continue
 
+            # Clean up temporary files after backload
+            source.cleanup_temp_files()
+
         else:
             # Just fetch latest using LATEST endpoint
             print("📥 Downloading latest timestamp...")
@@ -313,6 +316,9 @@ def fetch_command(args) -> int:
 
             print(f"✅ Saved: {output_path}")
 
+        # Clean up temporary files
+        source.cleanup_temp_files()
+
         return 0
 
     except ImportError as e:
@@ -321,6 +327,12 @@ def fetch_command(args) -> int:
         return 1
     except Exception as e:
         print(f"❌ Error: {e}")
+        # Try to clean up if source exists
+        try:
+            if 'source' in locals():
+                source.cleanup_temp_files()
+        except:
+            pass
         return 1
 
 

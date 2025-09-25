@@ -349,4 +349,20 @@ class SHMURadarSource(RadarSource):
             'grid_size': [1560, 2270],  # [height, width]
             'resolution_m': [480, 330]  # [y_res, x_res] approximately
         }
-        
+
+    def cleanup_temp_files(self):
+        """Clean up all temporary files created during this session"""
+        cleaned_count = 0
+        for cache_key, file_path in list(self.temp_files.items()):
+            try:
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+                    cleaned_count += 1
+                del self.temp_files[cache_key]
+            except Exception as e:
+                print(f"⚠️  Could not delete temp file {file_path}: {e}")
+
+        if cleaned_count > 0:
+            print(f"🧹 Cleaned up {cleaned_count} temporary SHMU files")
+        return cleaned_count
+

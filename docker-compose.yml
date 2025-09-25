@@ -9,9 +9,7 @@ services:
     image: imeteo-radar:latest
     container_name: imeteo-radar
     volumes:
-      - ./outputs:/app/outputs
-      - radar-dwd:/tmp/germany
-      - radar-shmu:/tmp/slovakia
+      - ${RADAR_OUTPUT_DIR:-./radar-output}:/tmp  # Maps to local directory
     environment:
       - TZ=Europe/Berlin
     networks:
@@ -26,8 +24,7 @@ services:
     container_name: dwd-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source dwd; sleep 300; done"
     volumes:
-      - ./outputs/dwd:/app/outputs
-      - radar-dwd:/tmp/germany
+      - ${RADAR_OUTPUT_DIR:-./radar-output}/germany:/tmp/germany  # Maps to local directory
     environment:
       - TZ=Europe/Berlin
     restart: unless-stopped
@@ -45,8 +42,7 @@ services:
     container_name: shmu-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source shmu; sleep 300; done"
     volumes:
-      - ./outputs/shmu:/app/outputs
-      - radar-shmu:/tmp/slovakia
+      - ${RADAR_OUTPUT_DIR:-./radar-output}/slovakia:/tmp/slovakia  # Maps to local directory
     environment:
       - TZ=Europe/Bratislava
     restart: unless-stopped
@@ -71,9 +67,7 @@ services:
         sleep 86400;
       done"
     volumes:
-      - ./outputs:/app/outputs
-      - radar-dwd:/tmp/germany
-      - radar-shmu:/tmp/slovakia
+      - ${RADAR_OUTPUT_DIR:-./radar-output}:/tmp  # Maps to local directory
     environment:
       - TZ=Europe/Berlin
     restart: unless-stopped
@@ -97,9 +91,7 @@ services:
         sleep 86400;
       done"
     volumes:
-      - ./outputs:/app/outputs
-      - radar-dwd:/tmp/germany
-      - radar-shmu:/tmp/slovakia
+      - ${RADAR_OUTPUT_DIR:-./radar-output}:/tmp  # Maps to local directory
     environment:
       - TZ=Europe/Berlin
     restart: unless-stopped
@@ -108,11 +100,7 @@ services:
     profiles:
       - production
 
-volumes:
-  radar-dwd:
-    name: radar-dwd-data
-  radar-shmu:
-    name: radar-shmu-data
+# No named volumes needed - using host's /tmp directly
 
 networks:
   radar-network:
