@@ -24,6 +24,18 @@ imeteo-radar fetch --source shmu --output /path/to/output/
 imeteo-radar extent --source all
 ```
 
+### 🐳 Docker Quickstart
+
+```bash
+# Using pre-built image
+docker pull imeteo/radar:latest
+docker run --rm -v $(pwd)/data:/data imeteo/radar fetch --source dwd
+
+# Build and run locally
+docker build -t imeteo-radar .
+docker run --rm -v $(pwd)/data:/data imeteo-radar fetch --source shmu
+```
+
 ## 📦 Installation
 
 ```bash
@@ -134,6 +146,58 @@ imeteo-radar/
 │   └── generate_colorbar.py  # Colorbar generation
 ├── pyproject.toml          # Package configuration
 └── README.md              # This file
+```
+
+## 🐳 Docker
+
+### Build
+```bash
+# Build image
+docker build -t imeteo-radar .
+
+# Multi-platform build
+docker buildx build --platform linux/amd64,linux/arm64 -t imeteo-radar .
+```
+
+### Run Ad-hoc Jobs
+```bash
+# Fetch latest data
+docker run --rm -v $(pwd)/data:/data imeteo-radar fetch --source dwd
+docker run --rm -v $(pwd)/data:/data imeteo-radar fetch --source shmu
+
+# Backload historical data
+docker run --rm -v $(pwd)/data:/data imeteo-radar fetch --source dwd --backload --hours 6
+
+# Custom output directory
+docker run --rm -v /path/to/output:/data imeteo-radar fetch --source shmu --output /data
+
+# Generate extent information
+docker run --rm -v $(pwd)/data:/data imeteo-radar extent --source all
+```
+
+### Docker Compose
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  radar:
+    image: imeteo-radar
+    volumes:
+      - ./data:/data
+    command: fetch --source dwd
+```
+
+### Cron Jobs
+```bash
+# Host cron (crontab -e)
+*/5 * * * * docker run --rm -v /data:/data imeteo-radar fetch --source dwd
+*/5 * * * * docker run --rm -v /data:/data imeteo-radar fetch --source shmu
+
+# Docker container with cron
+docker run -d --name radar-cron \
+  -v /data:/data \
+  -v ./crontab:/etc/cron.d/radar \
+  imeteo-radar cron
 ```
 
 ## 🛠️ Development
