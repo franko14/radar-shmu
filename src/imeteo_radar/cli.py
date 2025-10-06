@@ -294,6 +294,7 @@ def fetch_command(args) -> int:
             print(f"✅ Downloaded {len(files)} files")
 
             # Process each file to PNG
+            processed_count = 0
             for file_info in files:
                 try:
                     # Extract timestamp for filename
@@ -337,8 +338,7 @@ def fetch_command(args) -> int:
                     continue
 
             # Summary
-            if args.skip_existing:
-                print(f"✅ Summary: Processed {processed_count} files, Skipped {skipped_count} files")
+            print(f"✅ Summary: Processed {processed_count} files")
 
             # Clean up temporary files after backload
             source.cleanup_temp_files()
@@ -367,12 +367,6 @@ def fetch_command(args) -> int:
             unix_timestamp = int(dt.timestamp())
             filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
-
-            # Check if file already exists in Spaces (if skip-existing enabled)
-            if args.skip_existing and filename in existing_files:
-                print(f"⏭️  Skipped: {filename} (already exists in Spaces)")
-                print("✅ No new data to process")
-                return 0
 
             # Process to array
             radar_data = source.process_to_array(file_info['path'])
