@@ -7,6 +7,7 @@ Focused on DWD dmax product with simple fetch command.
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
@@ -63,6 +64,11 @@ def create_parser() -> argparse.ArgumentParser:
         '--update-extent',
         action='store_true',
         help='Force update extent_index.json file'
+    )
+    fetch_parser.add_argument(
+        '--disable-upload',
+        action='store_true',
+        help='Disable upload to DigitalOcean Spaces (for local development only)'
     )
 
     # Extent command - generate extent information only
@@ -165,6 +171,40 @@ def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
     return True
 
 
+def cleanup_old_files(output_dir: Path, max_age_hours: int = 6):
+    """
+    Clean up PNG files older than max_age_hours
+
+    Args:
+        output_dir: Directory containing PNG files
+        max_age_hours: Maximum age in hours (default: 6)
+    """
+    if not output_dir.exists():
+        return
+
+    current_time = time.time()
+    max_age_seconds = max_age_hours * 3600
+    deleted_count = 0
+
+    for png_file in output_dir.glob("*.png"):
+        # Skip extent_index.json and other non-PNG files
+        if png_file.suffix != '.png':
+            continue
+
+        # Check file age
+        file_age = current_time - png_file.stat().st_mtime
+
+        if file_age > max_age_seconds:
+            try:
+                png_file.unlink()
+                deleted_count += 1
+            except Exception as e:
+                print(f"⚠️  Failed to delete {png_file.name}: {e}")
+
+    if deleted_count > 0:
+        print(f"🗑️  Cleaned up {deleted_count} old PNG files (older than {max_age_hours}h)")
+
+
 def fetch_command(args) -> int:
     """Handle fetch command for radar data"""
 
@@ -173,6 +213,7 @@ def fetch_command(args) -> int:
         from .sources.dwd import DWDRadarSource
         from .sources.shmu import SHMURadarSource
         from .processing.exporter import PNGExporter
+        from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
         # Initialize source based on selection
         if args.source == 'dwd':
@@ -188,6 +229,26 @@ def fetch_command(args) -> int:
             return 1
 
         exporter = PNGExporter()
+
+        # Initialize DigitalOcean Spaces uploader
+        uploader = None
+        upload_enabled = not args.disable_upload
+
+        if upload_enabled:
+            if is_spaces_configured():
+                try:
+                    uploader = SpacesUploader()
+                    print("☁️  DigitalOcean Spaces upload enabled")
+                except Exception as e:
+                    print(f"⚠️  Failed to initialize Spaces uploader: {e}")
+                    print("⚠️  Falling back to local-only mode (upload disabled)")
+                    upload_enabled = False
+            else:
+                print("⚠️  DigitalOcean Spaces not configured (missing environment variables)")
+                print("⚠️  Falling back to local-only mode (upload disabled)")
+                upload_enabled = False
+        else:
+            print("📁 Local-only mode (--disable-upload flag used)")
 
         # Set output directory based on source
         if not args.output:
@@ -235,15 +296,16 @@ def fetch_command(args) -> int:
             # Process each file to PNG
             for file_info in files:
                 try:
-                    # Process to array
-                    radar_data = source.process_to_array(file_info['path'])
-
                     # Extract timestamp for filename
                     timestamp_str = file_info['timestamp']
-                    # Convert YYYYMMDDHHMM00 to datetime
+                    # Convert YYYYMMDDHHMM00 to datetime and then to unix timestamp
                     dt = datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
-                    filename = dt.strftime("%Y-%m-%d_%H%M.png")
+                    unix_timestamp = int(dt.timestamp())
+                    filename = f"{unix_timestamp}.png"
                     output_path = output_dir / filename
+
+                    # Process to array
+                    radar_data = source.process_to_array(file_info['path'])
 
                     # Prepare data for PNG export
                     export_data = {
@@ -264,13 +326,25 @@ def fetch_command(args) -> int:
                     )
 
                     print(f"💾 Saved: {output_path}")
+                    processed_count += 1
+
+                    # Upload to DigitalOcean Spaces if enabled
+                    if upload_enabled and uploader:
+                        uploader.upload_file(output_path, args.source, filename)
 
                 except Exception as e:
                     print(f"⚠️  Failed to process {file_info['timestamp']}: {e}")
                     continue
 
+            # Summary
+            if args.skip_existing:
+                print(f"✅ Summary: Processed {processed_count} files, Skipped {skipped_count} files")
+
             # Clean up temporary files after backload
             source.cleanup_temp_files()
+
+            # Clean up old PNG files (older than 6 hours)
+            cleanup_old_files(output_dir, max_age_hours=6)
 
         else:
             # Just fetch latest using LATEST endpoint
@@ -287,14 +361,21 @@ def fetch_command(args) -> int:
 
             file_info = files[0]
 
-            # Process to array
-            radar_data = source.process_to_array(file_info['path'])
-
             # Extract timestamp for filename
             timestamp_str = file_info['timestamp']
             dt = datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
-            filename = dt.strftime("%Y-%m-%d_%H%M.png")
+            unix_timestamp = int(dt.timestamp())
+            filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
+
+            # Check if file already exists in Spaces (if skip-existing enabled)
+            if args.skip_existing and filename in existing_files:
+                print(f"⏭️  Skipped: {filename} (already exists in Spaces)")
+                print("✅ No new data to process")
+                return 0
+
+            # Process to array
+            radar_data = source.process_to_array(file_info['path'])
 
             # Prepare data for PNG export
             export_data = {
@@ -316,8 +397,15 @@ def fetch_command(args) -> int:
 
             print(f"✅ Saved: {output_path}")
 
+            # Upload to DigitalOcean Spaces if enabled
+            if upload_enabled and uploader:
+                uploader.upload_file(output_path, args.source, filename)
+
         # Clean up temporary files
         source.cleanup_temp_files()
+
+        # Clean up old PNG files (older than 6 hours)
+        cleanup_old_files(output_dir, max_age_hours=6)
 
         return 0
 
