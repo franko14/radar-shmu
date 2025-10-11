@@ -186,6 +186,82 @@ For production use:
 0 1 * * * imeteo-radar fetch --source shmu --backload --hours 24 >> /var/log/radar-backload.log 2>&1
 ```
 
+## 🐳 Docker Deployment
+
+### Pre-built Docker Image
+
+The project is available as a pre-built Docker image on DockerHub: **`lfranko/imeteo-radar`**
+
+**Quick start:**
+```bash
+# Pull the latest image
+docker pull lfranko/imeteo-radar:latest
+
+# Run a command
+docker run --rm -v $(pwd)/outputs:/tmp lfranko/imeteo-radar:latest imeteo-radar fetch --source dwd
+```
+
+### Publishing to DockerHub
+
+#### Manual Publishing (Local Development)
+
+Use the provided script to build and push:
+```bash
+# Build and push to DockerHub
+./scripts/docker-push.sh
+```
+
+This script will:
+- Extract version from `pyproject.toml`
+- Build the Docker image
+- Tag with both `latest` and version-specific tags (e.g., `1.0.0`)
+- Push to `lfranko/imeteo-radar` on DockerHub
+
+**Prerequisites:**
+- Docker Desktop running with logged-in account
+- DockerHub repository created: `lfranko/imeteo-radar`
+
+#### Automated CI/CD (GitHub Actions)
+
+The repository includes a GitHub Actions workflow (`.github/workflows/docker-publish.yml`) that automatically:
+- Builds on every push and pull request
+- Pushes to DockerHub on pushes to `main` branch with `latest` tag
+- Creates version-specific tags when git tags are pushed (e.g., `v1.0.0` → `1.0.0`)
+
+**Setup GitHub secrets:**
+1. Go to repository Settings → Secrets and variables → Actions
+2. Add secrets:
+   - `DOCKERHUB_USERNAME`: Your DockerHub username
+   - `DOCKERHUB_TOKEN`: DockerHub access token (generate at hub.docker.com)
+
+**Trigger automated builds:**
+```bash
+# Push to main triggers latest build
+git push origin main
+
+# Create version tag triggers versioned build
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+### Team Usage
+
+Team members can use the pre-built image without building locally. See **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)** for comprehensive guide including:
+- Quick start instructions
+- Docker Compose examples
+- Production deployment options
+- Environment variable configuration
+- Troubleshooting guide
+
+**Simple team onboarding:**
+```bash
+# Team members only need Docker installed
+docker pull lfranko/imeteo-radar:latest
+docker run --rm lfranko/imeteo-radar:latest imeteo-radar --help
+```
+
+No Python, no dependencies, no build required! 🚀
+
 ## 🔗 Integration Examples
 
 ### Python API
