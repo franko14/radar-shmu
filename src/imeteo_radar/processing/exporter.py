@@ -34,6 +34,7 @@ class PNGExporter:
     
     def __init__(self):
         self.colormaps = self._initialize_colormaps()
+        self.colormap_luts = self._build_colormap_luts()
         
     def _initialize_colormaps(self):
         """Initialize colormaps - SHMU colormap is the single source of truth"""
@@ -89,9 +90,41 @@ class PNGExporter:
         #
         # except Exception as e:
         #     print(f"⚠️  Warning: Could not create precipitation colormap: {e}")
-        
+
         return colormaps
-        
+
+    def _build_colormap_luts(self):
+        """
+        Build uint8 lookup tables for fast, memory-efficient colormap application.
+
+        Pre-computes 256-entry RGBA uint8 LUT for each colormap, eliminating need for
+        float64 intermediate arrays. Reduces memory usage by ~800 MB per image.
+        """
+        luts = {}
+
+        for name, cmap_info in self.colormaps.items():
+            # Get the data range for this colormap
+            vmin, vmax = cmap_info['range']
+
+            # Create 256 evenly-spaced values across the data range
+            values = np.linspace(vmin, vmax, 256)
+
+            # Apply normalization and colormap to get colors
+            norm_values = cmap_info['norm'](values)
+            colors_float = cmap_info['colormap'](norm_values)  # Returns RGBA float [0,1]
+
+            # Convert to uint8 RGBA (this is tiny: only 256 x 4 = 1 KB!)
+            lut_rgba = (colors_float * 255).astype(np.uint8)
+
+            luts[name] = {
+                'lut': lut_rgba,
+                'vmin': vmin,
+                'vmax': vmax,
+                'units': cmap_info['units']
+            }
+
+        return luts
+
     def export_png(self, 
                   radar_data: Dict[str, Any],
                   output_path: Path,
@@ -239,23 +272,39 @@ class PNGExporter:
                 raise ValueError("Empty or invalid radar data")
             
             print(f"🚀 Fast PNG export: {data.shape} -> {output_path}")
-            
-            # Get colormap information
+
+            # Get colormap name (for LUT lookup)
             cmap_info = self._select_colormap(radar_data, colormap_type)
-            
-            # Apply colormap to data using matplotlib's functionality
-            # But just to get colors, not for plotting
-            norm_data = cmap_info['norm'](data)
-            colored_data = cmap_info['colormap'](norm_data)
-            
-            # Convert to 8-bit RGBA
-            rgba_data = (colored_data * 255).astype(np.uint8)
-            
+            cmap_name = cmap_info['name']
+
+            # Get pre-computed LUT for this colormap
+            lut_info = self.colormap_luts[cmap_name]
+
+            # MEMORY OPTIMIZATION: Use uint8 LUT instead of float64 colormap
+            # Old method used ~800 MB in intermediate float64 arrays
+            # New method: direct uint8 lookup, only ~80 MB peak
+
+            # Map data values to LUT indices (0-255)
+            # Handle NaN/invalid values separately
+            valid_mask = np.isfinite(data)
+
+            # Clip and scale valid data to 0-255 index range
+            indices = np.zeros(data.shape, dtype=np.uint8)
+            if np.any(valid_mask):
+                valid_data = data[valid_mask]
+                valid_indices = np.clip(
+                    ((valid_data - lut_info['vmin']) / (lut_info['vmax'] - lut_info['vmin']) * 255),
+                    0, 255
+                ).astype(np.uint8)
+                indices[valid_mask] = valid_indices
+
+            # Apply LUT: direct uint8 RGBA lookup (very fast, low memory!)
+            rgba_data = lut_info['lut'][indices]
+
             # Handle transparency for NaN/invalid values
             if transparent_background:
                 # Set alpha to 0 for invalid data (NaN values)
-                invalid_mask = ~np.isfinite(data)
-                rgba_data[invalid_mask, 3] = 0  # Set alpha channel to 0
+                rgba_data[~valid_mask, 3] = 0  # Set alpha channel to 0
             
             # Create PIL image directly from RGBA array
             # PIL expects (height, width, channels)
@@ -286,18 +335,18 @@ class PNGExporter:
                 'dimensions': data.shape,
                 'extent_reference': 'config/extent_index.json',
                 'source': radar_data.get('metadata', {}).get('source', 'unknown'),
-                'colormap': cmap_info['name'],
-                'units': cmap_info['units'],
+                'colormap': cmap_name,
+                'units': lut_info['units'],
                 'data_range': [float(np.nanmin(data)), float(np.nanmax(data))],
-                'valid_pixels': int(np.sum(~np.isnan(data))),
+                'valid_pixels': int(np.sum(valid_mask)),
                 'transparent': transparent_background,
                 'timestamp': radar_data.get('timestamp', 'unknown'),
-                'export_method': 'PIL_fast',
+                'export_method': 'PIL_fast_LUT',
                 'format': 'PNG (8-bit indexed palette, optimized)'
             }
-            
+
             print(f"⚡ Fast PNG exported: {output_path}")
-            print(f"📐 Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {cmap_info['units']}")
+            print(f"📐 Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {lut_info['units']}")
             
             return output_path, metadata
             

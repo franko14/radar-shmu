@@ -404,31 +404,29 @@ class DWDRadarSource(RadarSource):
                 except:
                     print("⚠️ No projection definition found - using corner approximation")
                 
-                # Create proper coordinate arrays using projection handling
+                # MEMORY OPTIMIZATION: Calculate extent from corners only (no meshgrids!)
+                # Old method created 2D meshgrids consuming ~322 MB
+                # New method: only use corner coordinates, ~0 MB overhead
                 try:
-                    lons, lats = projection_handler.create_dwd_coordinates(
-                        data.shape, where_attrs, proj_def
-                    )
-                    print(f"📊 DWD bounds: W={np.nanmin(lons):.2f}, E={np.nanmax(lons):.2f}, "
-                          f"N={np.nanmax(lats):.2f}, S={np.nanmin(lats):.2f}")
-                    
+                    extent_bounds = projection_handler.calculate_dwd_extent(where_attrs, proj_def)
+                    print(f"📊 DWD bounds: W={extent_bounds['west']:.2f}, E={extent_bounds['east']:.2f}, "
+                          f"N={extent_bounds['north']:.2f}, S={extent_bounds['south']:.2f}")
+
                 except Exception as e:
-                    print(f"⚠️ Projection handling failed: {e}")
+                    print(f"⚠️ Extent calculation failed: {e}")
                     # Fallback to default bounds
-                    west_lon, south_lat = 3.0, 47.0
-                    east_lon, north_lat = 17.0, 56.0
-                    lons = np.linspace(west_lon, east_lon, data.shape[1])
-                    lats = np.linspace(north_lat, south_lat, data.shape[0])
-                    lons, lats = np.meshgrid(lons, lats)
-                
+                    extent_bounds = {
+                        'west': 3.0,
+                        'east': 17.0,
+                        'south': 47.0,
+                        'north': 56.0
+                    }
+
                 timestamp = self._extract_timestamp_from_path(file_path)
-                
+
                 return {
                     'data': scaled_data,
-                    'coordinates': {
-                        'lons': lons,
-                        'lats': lats
-                    },
+                    'coordinates': None,  # No longer generated to save memory
                     'metadata': {
                         'product': metadata.get('product', 'UNKNOWN'),
                         'quantity': metadata.get('quantity', 'UNKNOWN'),
@@ -438,12 +436,7 @@ class DWDRadarSource(RadarSource):
                         'nodata_value': np.nan
                     },
                     'extent': {
-                        'wgs84': {
-                            'west': np.nanmin(lons),
-                            'east': np.nanmax(lons),
-                            'south': np.nanmin(lats),
-                            'north': np.nanmax(lats)
-                        }
+                        'wgs84': extent_bounds
                     },
                     'dimensions': data.shape,
                     'timestamp': timestamp

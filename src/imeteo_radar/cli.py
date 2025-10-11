@@ -317,9 +317,9 @@ def fetch_command(args) -> int:
                         'units': 'dBZ'
                     }
 
-                    # Export to PNG
+                    # Export to PNG (using fast method to reduce memory usage)
                     extent = source.get_extent()
-                    exporter.export_png(
+                    exporter.export_png_fast(
                         radar_data=export_data,
                         output_path=output_path,
                         extent=extent,
@@ -332,6 +332,12 @@ def fetch_command(args) -> int:
                     # Upload to DigitalOcean Spaces if enabled
                     if upload_enabled and uploader:
                         uploader.upload_file(output_path, args.source, filename)
+
+                    # Clean up matplotlib and numpy memory after each file
+                    import matplotlib.pyplot as plt
+                    import gc
+                    plt.close('all')
+                    gc.collect()
 
                 except Exception as e:
                     print(f"⚠️  Failed to process {file_info['timestamp']}: {e}")
@@ -380,9 +386,9 @@ def fetch_command(args) -> int:
                 'units': 'dBZ'
             }
 
-            # Export to PNG
+            # Export to PNG (using fast method to reduce memory usage)
             extent = source.get_extent()
-            exporter.export_png(
+            exporter.export_png_fast(
                 radar_data=export_data,
                 output_path=output_path,
                 extent=extent,
