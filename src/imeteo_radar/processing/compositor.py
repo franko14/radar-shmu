@@ -151,16 +151,9 @@ class RadarCompositor:
             # Create meshgrid for transformation
             source_lons_2d, source_lats_2d = np.meshgrid(source_lon_1d, source_lat_1d)
 
-            # Convert to Mercator
-            source_x_2d = np.zeros_like(source_lons_2d)
-            source_y_2d = np.zeros_like(source_lats_2d)
-
-            print(f"   Converting {source_lons_2d.size:,} coordinates to Mercator...")
-            for i in range(source_lons_2d.shape[0]):
-                for j in range(source_lons_2d.shape[1]):
-                    source_x_2d[i, j], source_y_2d[i, j] = lonlat_to_mercator(
-                        source_lons_2d[i, j], source_lats_2d[i, j]
-                    )
+            # Convert to Mercator using vectorized operation (100-1000x faster!)
+            print(f"   Converting {source_lons_2d.size:,} coordinates to Mercator (vectorized)...")
+            source_x_2d, source_y_2d = lonlat_to_mercator(source_lons_2d, source_lats_2d)
 
             # Create 1D coordinate vectors in Mercator (for RegularGridInterpolator)
             source_x_1d = source_x_2d[0, :]  # X varies along columns
