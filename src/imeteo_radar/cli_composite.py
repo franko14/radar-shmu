@@ -66,35 +66,70 @@ def composite_command_impl(args: Any) -> int:
 
 
 def _process_latest(args, sources, exporter, output_dir):
-    """Process latest available data from all sources"""
+    """Process latest available data from all sources
+
+    Ensures all sources have data for the SAME timestamp before creating composite.
+    """
     from .processing.compositor import create_composite
     import json
     from datetime import datetime
     import pytz
 
-    print("\n🔍 Downloading latest data from all sources...")
+    print("\n🔍 Finding common timestamp across all sources...")
 
-    sources_data = []
+    # Step 1: Download recent timestamps from each source (get more to find overlap)
+    all_source_files = {}
     for source_name, (source, product) in sources.items():
-        print(f"\n📥 Downloading from {source_name.upper()}...")
-        files = source.download_latest(count=1, products=[product])
+        print(f"\n📥 Checking {source_name.upper()} recent timestamps...")
+        files = source.download_latest(count=10, products=[product])  # Get last 10 to find overlap
 
         if files:
-            file_info = files[0]
-            print(f"✅ Downloaded: {file_info['timestamp']}")
-
-            # Process to array
-            try:
-                radar_data = source.process_to_array(file_info['path'])
-                sources_data.append((source_name, radar_data))
-            except Exception as e:
-                print(f"⚠️  Failed to process {source_name}: {e}")
+            all_source_files[source_name] = files
+            timestamps = [f['timestamp'] for f in files[:3]]  # Show first 3
+            print(f"✅ Found {len(files)} timestamps (recent: {', '.join(timestamps)}...)")
         else:
-            print(f"⚠️  No data from {source_name.upper()}")
+            print(f"❌ No data from {source_name.upper()}")
+            return 1
 
-    if len(sources_data) < 2:
-        print("❌ Need at least 2 sources to create composite")
+    # Step 2: Find most recent timestamp that ALL sources have
+    print("\n🔍 Finding common timestamp...")
+
+    # Group files by timestamp
+    timestamp_groups = {}
+    for source_name, files in all_source_files.items():
+        for file_info in files:
+            timestamp = file_info['timestamp']
+            if timestamp not in timestamp_groups:
+                timestamp_groups[timestamp] = {}
+            timestamp_groups[timestamp][source_name] = file_info
+
+    # Find most recent timestamp with all sources
+    common_timestamp = None
+    for timestamp in sorted(timestamp_groups.keys(), reverse=True):  # Most recent first
+        source_files = timestamp_groups[timestamp]
+        if len(source_files) == len(sources):  # All sources have this timestamp
+            common_timestamp = timestamp
+            print(f"✅ Found common timestamp: {timestamp}")
+            break
+
+    if not common_timestamp:
+        print(f"❌ No common timestamp found across all sources")
+        print(f"   Each source has different timestamps - try again in a few minutes")
         return 1
+
+    # Step 3: Process data for the common timestamp
+    print(f"\n📡 Processing data for timestamp: {common_timestamp}...")
+
+    sources_data = []
+    for source_name, file_info in timestamp_groups[common_timestamp].items():
+        source, product = sources[source_name]
+        try:
+            radar_data = source.process_to_array(file_info['path'])
+            sources_data.append((source_name, radar_data))
+            print(f"✅ Processed {source_name.upper()}")
+        except Exception as e:
+            print(f"❌ Failed to process {source_name}: {e}")
+            return 1
 
     # Create composite
     print("\n🎨 Creating composite...")
@@ -103,20 +138,32 @@ def _process_latest(args, sources, exporter, output_dir):
         resolution_m=args.resolution
     )
 
-    # Generate output filename
-    timestamp_str = datetime.now(pytz.UTC).strftime("%Y-%m-%d_%H%M")
-    filename = f"{timestamp_str}.png"
+    # Generate output filename using actual data timestamp (Unix timestamp format)
+    # Parse timestamp: YYYYMMDDHHMMSS -> Unix timestamp
+    dt = datetime.strptime(common_timestamp[:14], "%Y%m%d%H%M%S")
+    dt_utc = pytz.UTC.localize(dt)  # Make it UTC-aware
+    unix_timestamp = int(dt_utc.timestamp())
+    filename = f"{unix_timestamp}.png"
     output_path = output_dir / filename
 
     # Export to PNG
-    print(f"\n💾 Exporting to {filename}...")
+    print(f"\n💾 Exporting to {filename} (timestamp: {common_timestamp})...")
+    radar_data_for_export = {
+        'data': composite['data'],
+        'timestamp': common_timestamp,
+        'product': 'composite',
+        'source': 'composite',
+        'units': 'dBZ'
+    }
     exporter.export_png_fast(
-        data=composite['data'],
-        output_path=str(output_path),
+        radar_data=radar_data_for_export,
+        output_path=output_path,
+        extent=composite['extent'],
         colormap_type='shmu'
     )
 
     print(f"✅ Composite saved to {output_path}")
+    print(f"   Data timestamp: {common_timestamp} (Unix: {unix_timestamp})")
 
     # Update extent index if requested
     if args.update_extent or not (output_dir / 'extent_index.json').exists():
@@ -206,17 +253,26 @@ def _process_backload(args, sources, exporter, output_dir):
                 resolution_m=args.resolution
             )
 
-            # Generate output filename
+            # Generate output filename using Unix timestamp
             dt_obj = dt.strptime(timestamp, "%Y%m%d%H%M%S")
             dt_obj = pytz.UTC.localize(dt_obj)
-            filename = dt_obj.strftime("%Y-%m-%d_%H%M") + ".png"
+            unix_timestamp = int(dt_obj.timestamp())
+            filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
 
             # Export to PNG
-            print(f"💾 Exporting to {filename}...")
+            print(f"💾 Exporting to {filename} (timestamp: {timestamp})...")
+            radar_data_for_export = {
+                'data': composite['data'],
+                'timestamp': timestamp,
+                'product': 'composite',
+                'source': 'composite',
+                'units': 'dBZ'
+            }
             exporter.export_png_fast(
-                data=composite['data'],
-                output_path=str(output_path),
+                radar_data=radar_data_for_export,
+                output_path=output_path,
+                extent=composite['extent'],
                 colormap_type='shmu'
             )
 

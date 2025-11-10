@@ -8,7 +8,7 @@ reflectivity strategy. Handles reprojection to common Web Mercator grid.
 
 import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
-from scipy.interpolate import griddata
+from scipy.interpolate import RegularGridInterpolator
 import gc
 import warnings
 
@@ -43,6 +43,7 @@ class RadarCompositor:
         self.target_extent = target_extent
         self.resolution_m = resolution_m
         self.projection_handler = ProjectionHandler()
+        self.coordinate_cache = {}  # Cache coordinates during operation
 
         # Calculate target grid dimensions
         self._setup_target_grid()
@@ -116,72 +117,94 @@ class RadarCompositor:
             source_data = radar_data['data']
             coordinates = radar_data['coordinates']
 
+            # Generate coordinates if not provided (lazy generation with caching)
+            if coordinates is None:
+                cache_key = source_name
+                if cache_key not in self.coordinate_cache:
+                    print(f"   Generating coordinates from HDF5 metadata...")
+                    coordinates = self._generate_coordinates_from_metadata(
+                        radar_data['dimensions'],
+                        radar_data['extent'],
+                        radar_data.get('projection')
+                    )
+                    self.coordinate_cache[cache_key] = coordinates
+                else:
+                    print(f"   Using cached coordinates...")
+                    coordinates = self.coordinate_cache[cache_key]
+
             # Get source coordinates
             source_lons = coordinates['lons']
             source_lats = coordinates['lats']
 
-            # Handle 1D coordinate arrays (SHMU/CHMI style)
+            # Handle 1D coordinate arrays (SHMU/CHMI style) - keep as 1D for RegularGridInterpolator
             if source_lons.ndim == 1 and source_lats.ndim == 1:
-                # Create 2D meshgrid
-                source_lons, source_lats = np.meshgrid(source_lons, source_lats)
+                # Source is already on regular grid - perfect for RegularGridInterpolator
+                source_lon_1d = source_lons
+                source_lat_1d = source_lats
+            else:
+                # DWD 2D coordinates - extract 1D coordinate vectors
+                # Assume coordinates form a regular grid (they should from projection)
+                source_lon_1d = source_lons[0, :]  # First row
+                source_lat_1d = source_lats[:, 0]  # First column
 
-            # Flatten arrays for reprojection
-            source_lons_flat = source_lons.flatten()
-            source_lats_flat = source_lats.flatten()
-            source_data_flat = source_data.flatten()
+            # Convert source coordinate grid to Web Mercator
+            # Create meshgrid for transformation
+            source_lons_2d, source_lats_2d = np.meshgrid(source_lon_1d, source_lat_1d)
 
-            # Filter out NaN values (no need to reproject nodata)
-            valid_mask = ~np.isnan(source_data_flat)
-            valid_lons = source_lons_flat[valid_mask]
-            valid_lats = source_lats_flat[valid_mask]
-            valid_data = source_data_flat[valid_mask]
+            # Convert to Mercator
+            source_x_2d = np.zeros_like(source_lons_2d)
+            source_y_2d = np.zeros_like(source_lats_2d)
 
-            if len(valid_data) == 0:
+            print(f"   Converting {source_lons_2d.size:,} coordinates to Mercator...")
+            for i in range(source_lons_2d.shape[0]):
+                for j in range(source_lons_2d.shape[1]):
+                    source_x_2d[i, j], source_y_2d[i, j] = lonlat_to_mercator(
+                        source_lons_2d[i, j], source_lats_2d[i, j]
+                    )
+
+            # Create 1D coordinate vectors in Mercator (for RegularGridInterpolator)
+            source_x_1d = source_x_2d[0, :]  # X varies along columns
+            source_y_1d = source_y_2d[:, 0]  # Y varies along rows
+
+            # Count valid data
+            valid_mask = ~np.isnan(source_data)
+            valid_count = np.sum(valid_mask)
+            total_count = source_data.size
+
+            if valid_count == 0:
                 print(f"⚠️  No valid data in {source_name}, skipping")
                 return False
 
-            print(f"   Valid pixels: {len(valid_data):,} / {len(source_data_flat):,} "
-                  f"({100*len(valid_data)/len(source_data_flat):.1f}%)")
+            print(f"   Valid pixels: {valid_count:,} / {total_count:,} "
+                  f"({100*valid_count/total_count:.1f}%)")
 
-            # Convert source coordinates to Web Mercator
-            source_x = np.zeros(len(valid_lons))
-            source_y = np.zeros(len(valid_lons))
-
-            for i in range(len(valid_lons)):
-                source_x[i], source_y[i] = lonlat_to_mercator(valid_lons[i], valid_lats[i])
-
-            # Filter points outside target extent (with small buffer)
-            buffer = self.resolution_m * 2  # 2-pixel buffer
-            in_bounds = (
-                (source_x >= self.mercator_bounds['west'] - buffer) &
-                (source_x <= self.mercator_bounds['east'] + buffer) &
-                (source_y >= self.mercator_bounds['south'] - buffer) &
-                (source_y <= self.mercator_bounds['north'] + buffer)
+            # Create RegularGridInterpolator with source data
+            # Use 'nearest' method to preserve discrete dBZ values and avoid smoothing
+            print(f"   Creating regular grid interpolator...")
+            interpolator = RegularGridInterpolator(
+                (source_y_1d, source_x_1d),  # Note: y first (rows), x second (cols)
+                source_data,
+                method='nearest',
+                bounds_error=False,
+                fill_value=np.nan
             )
 
-            source_x = source_x[in_bounds]
-            source_y = source_y[in_bounds]
-            valid_data = valid_data[in_bounds]
+            # Create target grid points
+            target_xx, target_yy = np.meshgrid(self.target_x, self.target_y)
+            target_points = np.column_stack([target_yy.ravel(), target_xx.ravel()])
 
-            if len(valid_data) == 0:
+            # Interpolate to target grid
+            print(f"   Resampling to target grid...")
+            interpolated_flat = interpolator(target_points)
+            interpolated = interpolated_flat.reshape(self.grid_height, self.grid_width)
+
+            # Count in-bounds pixels (non-NaN after interpolation)
+            in_bounds_count = np.sum(~np.isnan(interpolated))
+            if in_bounds_count == 0:
                 print(f"⚠️  No data from {source_name} overlaps target extent, skipping")
                 return False
 
-            print(f"   In-bounds pixels: {len(valid_data):,}")
-
-            # Create target grid meshgrid
-            target_xx, target_yy = np.meshgrid(self.target_x, self.target_y)
-
-            # Interpolate source data onto target grid using nearest neighbor
-            # (fast and preserves discrete dBZ values)
-            print(f"   Interpolating to target grid...")
-            interpolated = griddata(
-                points=(source_x, source_y),
-                values=valid_data,
-                xi=(target_xx, target_yy),
-                method='nearest',
-                fill_value=np.nan
-            )
+            print(f"   In-bounds pixels: {in_bounds_count:,}")
 
             # Merge using maximum reflectivity (element-wise max, NaN-aware)
             # np.fmax ignores NaN values (unlike np.maximum)
@@ -196,9 +219,9 @@ class RadarCompositor:
             self.sources_merged.append(source_name)
 
             # Cleanup
-            del interpolated, target_xx, target_yy
-            del source_x, source_y, valid_data
-            del source_lons_flat, source_lats_flat, source_data_flat
+            del interpolated, target_xx, target_yy, target_points
+            del source_x_2d, source_y_2d, source_lons_2d, source_lats_2d
+            del interpolator
             gc.collect()
 
             return True
@@ -208,6 +231,40 @@ class RadarCompositor:
             import traceback
             traceback.print_exc()
             return False
+
+    def _generate_coordinates_from_metadata(self, dimensions: Tuple[int, int],
+                                           extent: Dict[str, Any],
+                                           projection_info: Optional[Dict[str, Any]]) -> Dict[str, np.ndarray]:
+        """
+        Generate coordinates from real HDF5 metadata.
+
+        For DWD (stereographic): Uses projection_handler with real HDF5 where_attrs + proj_def
+        For SHMU/CHMI (Web Mercator): Simple linspace from real corner coordinates
+
+        Args:
+            dimensions: Data shape (ny, nx)
+            extent: Extent dict with wgs84 bounds from HDF5
+            projection_info: Projection metadata from HDF5 (None for Web Mercator sources)
+
+        Returns:
+            Dict with 'lons' and 'lats' arrays (1D or 2D depending on projection)
+        """
+        if projection_info and projection_info.get('type') == 'stereographic':
+            # DWD: Use projection_handler with REAL HDF5 metadata
+            print(f"      Using stereographic projection from HDF5...")
+            lons, lats = self.projection_handler.create_dwd_coordinates(
+                shape=dimensions,
+                where_attrs=projection_info['where_attrs'],  # Real HDF5 data
+                proj_def=projection_info['proj_def']         # Real HDF5 data
+            )
+            return {'lons': lons, 'lats': lats}
+        else:
+            # SHMU/CHMI: Web Mercator - simple grid from real corner coordinates
+            print(f"      Using Web Mercator grid from HDF5 corner coordinates...")
+            wgs84 = extent['wgs84']
+            lons = np.linspace(wgs84['west'], wgs84['east'], dimensions[1])
+            lats = np.linspace(wgs84['north'], wgs84['south'], dimensions[0])
+            return {'lons': lons, 'lats': lats}
 
     def get_composite(self) -> Dict[str, Any]:
         """

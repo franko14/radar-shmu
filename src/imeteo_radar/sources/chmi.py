@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from bs4 import BeautifulSoup
 
 from ..core.base import RadarSource, RadarData, lonlat_to_mercator
 
@@ -267,12 +266,13 @@ class CHMIRadarSource(RadarSource):
                 # Read raw data
                 data = f['dataset1/data1/data'][:]
 
-                # Get attributes
-                what_attrs = dict(f['dataset1/what'].attrs)
+                # Get attributes - CHMI stores scaling in data1/what (unlike SHMU)
+                what_attrs = dict(f['dataset1/data1/what'].attrs)
+                what_dataset_attrs = dict(f['dataset1/what'].attrs)  # For product/timestamp
                 where_attrs = dict(f['where'].attrs)
 
                 # Decode byte strings
-                for attr_dict in [what_attrs, where_attrs]:
+                for attr_dict in [what_attrs, what_dataset_attrs, where_attrs]:
                     for key, value in attr_dict.items():
                         if isinstance(value, bytes):
                             attr_dict[key] = value.decode('utf-8')
@@ -312,10 +312,10 @@ class CHMIRadarSource(RadarSource):
                 lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
 
                 # Extract metadata
-                product = what_attrs.get('product', 'UNKNOWN')
+                product = what_dataset_attrs.get('product', 'UNKNOWN')
                 quantity = what_attrs.get('quantity', 'UNKNOWN')
-                start_date = what_attrs.get('startdate', '')
-                start_time = what_attrs.get('starttime', '')
+                start_date = what_dataset_attrs.get('startdate', '')
+                start_time = what_dataset_attrs.get('starttime', '')
                 timestamp = start_date + start_time
 
                 return {
