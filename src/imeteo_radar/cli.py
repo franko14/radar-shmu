@@ -283,9 +283,20 @@ def fetch_command(args) -> int:
 
             # Download data (don't use LATEST for backload)
             if args.source == 'dwd':
-                files = source.download_latest(count=intervals, products=[product], use_latest=False)
+                files = source.download_latest(
+                    count=intervals,
+                    products=[product],
+                    use_latest=False,
+                    start_time=start,
+                    end_time=end
+                )
             else:  # SHMU
-                files = source.download_latest(count=intervals, products=[product])
+                files = source.download_latest(
+                    count=intervals,
+                    products=[product],
+                    start_time=start,
+                    end_time=end
+                )
 
             if not files:
                 print("❌ No data available for the specified period")

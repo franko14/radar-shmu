@@ -12,7 +12,7 @@ import requests
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..core.base import RadarSource, RadarData, lonlat_to_mercator
@@ -107,7 +107,38 @@ class SHMURadarSource(RadarSource):
             return response.status_code == 200
         except:
             return False
-            
+
+    def _filter_timestamps_by_range(self, timestamps: List[str],
+                                    start_time: datetime, end_time: datetime) -> List[str]:
+        """Filter timestamps to only include those within the specified time range
+
+        Args:
+            timestamps: List of timestamp strings in format YYYYMMDDHHMM00 (14 digits)
+            start_time: Start of time range (timezone-aware datetime)
+            end_time: End of time range (timezone-aware datetime)
+
+        Returns:
+            Filtered list of timestamps within the range
+        """
+        import pytz
+
+        filtered = []
+        for ts in timestamps:
+            try:
+                # Parse SHMU timestamp format: YYYYMMDDHHMM00 (14 digits)
+                ts_dt = datetime.strptime(ts[:12], "%Y%m%d%H%M")
+                # Make timezone aware (SHMU uses UTC)
+                ts_dt = pytz.UTC.localize(ts_dt)
+
+                # Check if timestamp is within range
+                if start_time <= ts_dt <= end_time:
+                    filtered.append(ts)
+            except ValueError:
+                # Skip timestamps that can't be parsed
+                continue
+
+        return filtered
+
     def _get_product_url(self, timestamp: str, product: str) -> str:
         """Generate URL for SHMU product"""
         if product not in self.product_mapping:
@@ -164,8 +195,16 @@ class SHMURadarSource(RadarSource):
         except Exception as e:
             return {'error': str(e), 'timestamp': timestamp, 'product': product, 'success': False}
         
-    def download_latest(self, count: int, products: List[str] = None) -> List[Dict[str, Any]]:
-        """Download latest SHMU radar data"""
+    def download_latest(self, count: int, products: List[str] = None,
+                       start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Download latest SHMU radar data
+
+        Args:
+            count: Maximum number of timestamps to download
+            products: List of products to download (default: ['zmax', 'cappi2km'])
+            start_time: Optional start time for filtering (timezone-aware datetime)
+            end_time: Optional end time for filtering (timezone-aware datetime)
+        """
 
         if products is None:
             products = ['zmax', 'cappi2km']  # Default products
@@ -174,7 +213,16 @@ class SHMURadarSource(RadarSource):
 
         # Strategy: Check for current timestamps online
         print(f"🌐 Checking SHMU server for current timestamps...")
-        test_timestamps = self._generate_timestamps(count * 4)  # Generate more candidates
+
+        # Generate more timestamps if we're filtering by time range
+        multiplier = 8 if (start_time and end_time) else 4
+        test_timestamps = self._generate_timestamps(count * multiplier)
+
+        # Filter by time range if specified
+        if start_time and end_time:
+            test_timestamps = self._filter_timestamps_by_range(test_timestamps, start_time, end_time)
+            print(f"📅 Filtered timestamps to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}")
+
         available_timestamps = []
 
         for timestamp in test_timestamps:

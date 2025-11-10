@@ -12,7 +12,7 @@ import tempfile
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..core.base import RadarSource, lonlat_to_mercator
@@ -100,6 +100,37 @@ class DWDRadarSource(RadarSource):
         except Exception as e:
             print(f"⚠️  Could not parse directory listing: {e}")
             return []
+
+    def _filter_timestamps_by_range(self, timestamps: List[str],
+                                    start_time: datetime, end_time: datetime) -> List[str]:
+        """Filter timestamps to only include those within the specified time range
+
+        Args:
+            timestamps: List of timestamp strings in format YYYYMMDD_HHMM
+            start_time: Start of time range (timezone-aware datetime)
+            end_time: End of time range (timezone-aware datetime)
+
+        Returns:
+            Filtered list of timestamps within the range
+        """
+        import pytz
+
+        filtered = []
+        for ts in timestamps:
+            try:
+                # Parse DWD timestamp format: YYYYMMDD_HHMM
+                ts_dt = datetime.strptime(ts, "%Y%m%d_%H%M")
+                # Make timezone aware (DWD uses UTC+1, but data timestamps are in UTC)
+                ts_dt = pytz.UTC.localize(ts_dt)
+
+                # Check if timestamp is within range
+                if start_time <= ts_dt <= end_time:
+                    filtered.append(ts)
+            except ValueError:
+                # Skip timestamps that can't be parsed
+                continue
+
+        return filtered
 
     def _generate_timestamps(self, count: int) -> List[str]:
         """Generate recent timestamps with timezone-aware approach"""
@@ -234,14 +265,23 @@ class DWDRadarSource(RadarSource):
         except Exception as e:
             return {'error': str(e), 'timestamp': timestamp, 'product': product, 'success': False}
         
-    def download_latest(self, count: int = 1, products: List[str] = None, use_latest: bool = True) -> List[Dict[str, Any]]:
-        """Download latest DWD radar data"""
+    def download_latest(self, count: int = 1, products: List[str] = None, use_latest: bool = True,
+                       start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Download latest DWD radar data
+
+        Args:
+            count: Maximum number of timestamps to download
+            products: List of products to download (default: ['dmax'])
+            use_latest: Use LATEST endpoint for single file downloads
+            start_time: Optional start time for filtering (timezone-aware datetime)
+            end_time: Optional end time for filtering (timezone-aware datetime)
+        """
 
         if products is None:
             products = ['dmax']  # Default to maximum reflectivity
 
         # If only fetching one file and use_latest is True, use LATEST endpoint
-        if count == 1 and use_latest:
+        if count == 1 and use_latest and not start_time and not end_time:
             print(f"📡 Using LATEST endpoint for most recent data...")
             downloaded_files = []
             for product in products:
@@ -252,16 +292,24 @@ class DWDRadarSource(RadarSource):
                 else:
                     print(f"❌ Failed to download latest {product}: {result.get('error', 'Unknown error')}")
             return downloaded_files
-            
+
         print(f"🔍 Finding last {count} available DWD timestamps...")
-        
+
         # Strategy 1: Try parsing directory listing first (most reliable)
         available_timestamps = []
         for product in products:
             server_timestamps = self._get_available_timestamps_from_server(product)
             if server_timestamps:
-                available_timestamps = server_timestamps[:count]
-                print(f"✅ Using server directory listing")
+                # Filter by time range if specified
+                if start_time and end_time:
+                    filtered_timestamps = self._filter_timestamps_by_range(
+                        server_timestamps, start_time, end_time
+                    )
+                    available_timestamps = filtered_timestamps[:count]
+                    print(f"✅ Using server directory listing (filtered {len(server_timestamps)} → {len(filtered_timestamps)} timestamps)")
+                else:
+                    available_timestamps = server_timestamps[:count]
+                    print(f"✅ Using server directory listing")
                 break  # Use first working product for timestamp discovery
         
         # Strategy 2: Fallback to generated timestamps if directory parsing fails
