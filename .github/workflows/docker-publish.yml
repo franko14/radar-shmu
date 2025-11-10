@@ -38,6 +38,16 @@ jobs:
           # Tag with PR number for pull requests
           type=ref,event=pr
 
+    - name: Debug - Check secrets exist
+      if: github.event_name != 'pull_request'
+      run: |
+        echo "Username length: ${#DOCKERHUB_USERNAME}"
+        echo "Token length: ${#DOCKERHUB_TOKEN}"
+        echo "Username starts with: ${DOCKERHUB_USERNAME:0:3}***"
+      env:
+        DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
     - name: Log in to Docker Hub
       if: github.event_name != 'pull_request'
       uses: docker/login-action@v3
