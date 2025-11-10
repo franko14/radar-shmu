@@ -9,7 +9,7 @@ on:
     branches: [ "main" ]
 
 env:
-  DOCKERHUB_REPO: lfranko/imeteo-radar
+  DOCKERHUB_REPO: lfranko6/imeteo-radar
 
 jobs:
   build-and-push:
