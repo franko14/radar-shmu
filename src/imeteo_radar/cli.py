@@ -29,9 +29,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     fetch_parser.add_argument(
         '--source',
-        choices=['dwd', 'shmu'],
+        choices=['dwd', 'shmu', 'chmi'],
         default='dwd',
-        help='Radar source (DWD for Germany, SHMU for Slovakia)'
+        help='Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia)'
     )
     fetch_parser.add_argument(
         '--output',
@@ -78,7 +78,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     extent_parser.add_argument(
         '--source',
-        choices=['dwd', 'shmu', 'all'],
+        choices=['dwd', 'shmu', 'chmi', 'all'],
         default='all',
         help='Radar source(s) to generate extent for'
     )
@@ -212,6 +212,7 @@ def fetch_command(args) -> int:
     try:
         from .sources.dwd import DWDRadarSource
         from .sources.shmu import SHMURadarSource
+        from .sources.chmi import CHMIRadarSource
         from .processing.exporter import PNGExporter
         from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
@@ -224,6 +225,10 @@ def fetch_command(args) -> int:
             source = SHMURadarSource()
             product = 'zmax'
             country_dir = 'slovakia'
+        elif args.source == 'chmi':
+            source = CHMIRadarSource()
+            product = 'maxz'
+            country_dir = 'czechia'
         else:
             print(f"❌ Unknown source: {args.source}")
             return 1
@@ -466,6 +471,7 @@ def extent_command(args) -> int:
     try:
         from .sources.dwd import DWDRadarSource
         from .sources.shmu import SHMURadarSource
+        from .sources.chmi import CHMIRadarSource
         import json
 
         sources_to_process = []
@@ -475,6 +481,9 @@ def extent_command(args) -> int:
 
         if args.source == 'all' or args.source == 'shmu':
             sources_to_process.append(('shmu', SHMURadarSource(), 'slovakia'))
+
+        if args.source == 'all' or args.source == 'chmi':
+            sources_to_process.append(('chmi', CHMIRadarSource(), 'czechia'))
 
         combined_extent = {
             "metadata": {
