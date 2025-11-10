@@ -88,6 +88,57 @@ def create_parser() -> argparse.ArgumentParser:
         help='Output directory (default: /tmp/{country}/)'
     )
 
+    # Composite command - merge multiple sources
+    composite_parser = subparsers.add_parser(
+        'composite',
+        help='Generate composite radar images from multiple sources'
+    )
+    composite_parser.add_argument(
+        '--sources',
+        type=str,
+        default='dwd,shmu,chmi',
+        help='Comma-separated list of sources to merge (default: dwd,shmu,chmi)'
+    )
+    composite_parser.add_argument(
+        '--output',
+        type=Path,
+        default=Path('/tmp/composite'),
+        help='Output directory (default: /tmp/composite/)'
+    )
+    composite_parser.add_argument(
+        '--resolution',
+        type=float,
+        default=500.0,
+        help='Target resolution in meters (default: 500)'
+    )
+    composite_parser.add_argument(
+        '--backload',
+        action='store_true',
+        help='Enable backload of historical data'
+    )
+    composite_parser.add_argument(
+        '--hours',
+        type=int,
+        help='Number of hours to backload'
+    )
+    composite_parser.add_argument(
+        '--from',
+        dest='from_time',
+        type=str,
+        help='Start time for backload (format: "YYYY-MM-DD HH:MM")'
+    )
+    composite_parser.add_argument(
+        '--to',
+        dest='to_time',
+        type=str,
+        help='End time for backload (format: "YYYY-MM-DD HH:MM")'
+    )
+    composite_parser.add_argument(
+        '--update-extent',
+        action='store_true',
+        help='Force update extent_index.json file'
+    )
+
     return parser
 
 
@@ -454,6 +505,8 @@ def main():
             return fetch_command(args)
         elif args.command == 'extent':
             return extent_command(args)
+        elif args.command == 'composite':
+            return composite_command(args)
         else:
             print(f"Unknown command: {args.command}")
             return 1
@@ -531,6 +584,12 @@ def extent_command(args) -> int:
     except Exception as e:
         print(f"❌ Error: {e}")
         return 1
+
+
+def composite_command(args) -> int:
+    """Handle composite generation command"""
+    from .cli_composite import composite_command_impl
+    return composite_command_impl(args)
 
 
 if __name__ == "__main__":
