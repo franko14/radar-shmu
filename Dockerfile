@@ -53,8 +53,8 @@ COPY --from=builder /app/pyproject.toml ./pyproject.toml
 COPY scripts/ ./scripts/
 
 # Create output directories with proper permissions
-RUN mkdir -p /tmp/germany /tmp/slovakia /app/outputs /home/radar/.config/matplotlib \
-    && chown -R radar:radar /tmp/germany /tmp/slovakia /app/outputs /home/radar
+RUN mkdir -p /tmp/germany /tmp/slovakia /tmp/czechia /tmp/composite /app/outputs /home/radar/.config/matplotlib \
+    && chown -R radar:radar /tmp/germany /tmp/slovakia /tmp/czechia /tmp/composite /app/outputs /home/radar
 
 # Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"
@@ -66,7 +66,7 @@ ENV MPLCONFIGDIR="/home/radar/.config/matplotlib"
 USER radar
 
 # Set up volume for outputs
-VOLUME ["/app/outputs", "/tmp/germany", "/tmp/slovakia"]
+VOLUME ["/app/outputs", "/tmp/germany", "/tmp/slovakia", "/tmp/czechia", "/tmp/composite"]
 
 # Default command - show help
 CMD ["imeteo-radar", "--help"]
