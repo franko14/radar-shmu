@@ -50,17 +50,19 @@ jobs:
       with:
         context: .
         file: ./Dockerfile
-        platforms: linux/amd64,linux/arm64
+        # Multi-platform only on main/tags, single platform for PRs (faster)
+        platforms: ${{ github.event_name != 'pull_request' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache
-        cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache,mode=max
+        # Only use registry cache on main/tags (avoids auth issues on PRs)
+        cache-from: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache', env.DOCKERHUB_REPO) || 'type=gha' }}
+        cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache,mode=max', env.DOCKERHUB_REPO) || 'type=gha,mode=max' }}
 
     - name: Image digest
       run: echo "Image published with digest ${{ steps.build.outputs.digest }}"
 
-    - name: Summary
+    - name: Summary - Published
       if: github.event_name != 'pull_request'
       run: |
         echo "## Docker Image Published! 🚀" >> $GITHUB_STEP_SUMMARY
@@ -78,3 +80,16 @@ jobs:
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**View on DockerHub:** https://hub.docker.com/r/${{ env.DOCKERHUB_REPO }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Summary - PR Build Only
+      if: github.event_name == 'pull_request'
+      run: |
+        echo "## Docker Build Validated ✅" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Docker image built successfully for PR validation." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Note:** Image was not pushed to DockerHub (PR builds are for validation only)." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Once merged to main, the image will be published to:" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_REPO }}:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Version-specific tag from \`pyproject.toml\`" >> $GITHUB_STEP_SUMMARY
