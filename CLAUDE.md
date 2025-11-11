@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-iMeteo Radar is a multi-source weather radar data processing system that handles both DWD (German Weather Service) and SHMU (Slovak Hydrometeorological Institute) radar data. The system downloads ODIM_H5 format radar data, processes it with proper colorscaling and transparency, and exports high-quality PNG images suitable for web mapping applications.
+iMeteo Radar is a multi-source weather radar data processing system that handles DWD (German Weather Service), SHMU (Slovak Hydrometeorological Institute), and CHMI (Czech Hydrometeorological Institute) radar data. The system downloads ODIM_H5 format radar data, processes it with proper colorscaling and transparency, and exports high-quality PNG images suitable for web mapping applications. **New in v1.2.0**: Composite radar images that merge data from multiple sources using maximum reflectivity strategy.
 
 ## 🔧 Development Setup
 
@@ -34,12 +34,16 @@ pip install -e ".[dev]"
 imeteo-radar/
 ├── src/imeteo_radar/        # Main package
 │   ├── cli.py              # Command-line interface
+│   ├── cli_composite.py    # Composite command implementation
 │   ├── sources/            # Data source handlers
 │   │   ├── dwd.py         # DWD radar source (tempfile-based)
-│   │   └── shmu.py        # SHMU radar source (tempfile-based)
+│   │   ├── shmu.py        # SHMU radar source (tempfile-based)
+│   │   └── chmi.py        # CHMI radar source (tempfile-based)
 │   ├── processing/         # Data processing modules
-│   │   └── exporter.py    # PNG export with transparency
+│   │   ├── exporter.py    # PNG export with transparency
+│   │   └── compositor.py  # Multi-source composite generation
 │   ├── core/              # Core functionality
+│   │   └── projection.py  # Coordinate transformations
 │   ├── config/            # Configuration
 │   │   └── shmu_colormap.py  # Official SHMU colorscale
 │   └── utils/             # Utilities
@@ -60,6 +64,9 @@ imeteo-radar fetch --source dwd
 # Download latest SHMU zmax data
 imeteo-radar fetch --source shmu
 
+# Download latest CHMI maxz data
+imeteo-radar fetch --source chmi
+
 # Download last 6 hours of data
 imeteo-radar fetch --source dwd --backload --hours 6
 
@@ -71,6 +78,30 @@ imeteo-radar fetch --source dwd --output /data/radar/
 
 # Force update extent information
 imeteo-radar fetch --source shmu --update-extent
+```
+
+### Generate Composite Radar Images (NEW in v1.2.0)
+```bash
+# Create composite from all sources (DWD + SHMU + CHMI)
+imeteo-radar composite
+
+# Latest composite with custom output
+imeteo-radar composite --output /data/composite/
+
+# Custom sources selection
+imeteo-radar composite --sources dwd,shmu
+
+# Custom resolution (default: 500m)
+imeteo-radar composite --resolution 1000
+
+# Backload composite images for last 6 hours
+imeteo-radar composite --backload --hours 6
+
+# Specific time range
+imeteo-radar composite --backload --from "2024-11-10 10:00" --to "2024-11-10 12:00"
+
+# Combined options
+imeteo-radar composite --sources dwd,shmu,chmi --resolution 500 --backload --hours 3
 ```
 
 ### Generate Extent Information
@@ -90,6 +121,17 @@ imeteo-radar extent --source dwd
 - **SHMU Support**:
   - zmax product (maximum reflectivity)
   - Coverage: Slovakia and surrounding areas
+- **CHMI Support** (NEW in v1.2.0):
+  - maxz product (maximum reflectivity)
+  - Coverage: Czech Republic and surrounding areas
+  - Data source: https://opendata.chmi.cz/
+- **Composite Generation** (NEW in v1.2.0):
+  - Merge multiple radar sources (DWD + SHMU + CHMI)
+  - Maximum reflectivity merging strategy
+  - Automatic reprojection to Web Mercator (EPSG:3857)
+  - Configurable resolution (default: 500m)
+  - Memory-efficient sequential processing (<1.2GB)
+  - Combined extent: ~2.5°-23.8°E, 45.5°-56°N
 - **Data Processing**:
   - Temporary file processing (no permanent raw storage)
   - Transparent backgrounds for no-data areas
@@ -97,7 +139,7 @@ imeteo-radar extent --source dwd
   - Proper nodata handling (255 for uint8)
 - **Output**:
   - PNG format: `YYYY-MM-dd_HHMM.png`
-  - Default: `/tmp/germany/` (DWD), `/tmp/slovakia/` (SHMU)
+  - Default: `/tmp/germany/` (DWD), `/tmp/slovakia/` (SHMU), `/tmp/czechia/` (CHMI), `/tmp/composite/` (Composite)
   - Automatic extent_index.json generation
 
 ## 🧪 Testing

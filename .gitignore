@@ -97,3 +97,7 @@ Thumbs.db
 
 outputs
 storage
+
+# Monitoring reports
+reports/
+*.txt

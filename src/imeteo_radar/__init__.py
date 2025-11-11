@@ -5,7 +5,7 @@ A modern, high-performance radar data processing system for SHMU and DWD weather
 Supports parallel downloads, fast interpolation, and optimized PNG exports.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 __author__ = "Radar Processing Team"
 
 # Main exports
