@@ -475,6 +475,11 @@ class DWDRadarSource(RadarSource):
                 return {
                     'data': scaled_data,
                     'coordinates': None,  # No longer generated to save memory
+                    'projection': {
+                        'type': 'stereographic',
+                        'proj_def': proj_def,
+                        'where_attrs': where_attrs
+                    },
                     'metadata': {
                         'product': metadata.get('product', 'UNKNOWN'),
                         'quantity': metadata.get('quantity', 'UNKNOWN'),
