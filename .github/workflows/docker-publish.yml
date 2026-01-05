@@ -76,32 +76,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build image (amd64)
+      - name: Build and push multi-platform image
         uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: ${{ env.DOCKERHUB_REPO }}:build-amd64
-          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache,mode=max
-
-      - name: Build image (arm64)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/arm64
-          push: false
-          tags: ${{ env.DOCKERHUB_REPO }}:build-arm64
-          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-arm64
-          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-arm64,mode=max
-
-      - name: Push multi-platform image
-        uses: docker/build-push-action@v5
-        id: push
+        id: build
         with:
           context: .
           file: ./Dockerfile
@@ -109,13 +86,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache
-            type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-arm64
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache,mode=max
 
       - name: Print image digest
         run: |
-          echo "Image digest: ${{ steps.push.outputs.digest }}"
+          echo "Image digest: ${{ steps.build.outputs.digest }}"
 
       - name: Generate build summary
         run: |
@@ -130,7 +106,7 @@ jobs:
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ steps.push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Pull the image:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
