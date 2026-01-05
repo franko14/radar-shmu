@@ -12,94 +12,128 @@ env:
   DOCKERHUB_REPO: lfranko/imeteo-radar
 
 jobs:
-  build-and-push:
+  # Job 1: Validate PR builds (fast, single platform)
+  validate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Extract metadata (tags, labels) for Docker
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.DOCKERHUB_REPO }}
-        tags: |
-          # Tag with 'latest' on main branch pushes
-          type=raw,value=latest,enable={{is_default_branch}}
-          # Tag with version from pyproject.toml on main branch
-          type=raw,value={{branch}}-{{sha}},enable={{is_default_branch}}
-          # Tag with git tag (e.g., v1.0.0 -> 1.0.0)
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          # Tag with PR number for pull requests
-          type=ref,event=pr
+      - name: Build for validation
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-    - name: Debug - Check secrets exist
-      if: github.event_name != 'pull_request'
-      run: |
-        echo "Username length: ${#DOCKERHUB_USERNAME}"
-        echo "Token length: ${#DOCKERHUB_TOKEN}"
-        echo "Username starts with: ${DOCKERHUB_USERNAME:0:3}***"
-      env:
-        DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: PR Build Summary
+        run: |
+          echo "## Docker Build Validated ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Docker image built successfully for PR validation." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** Image was not pushed to DockerHub (PR builds are for validation only)." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Once merged to main, the image will be published to:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REPO }}:latest\`" >> $GITHUB_STEP_SUMMARY
 
-    - name: Log in to Docker Hub
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+  # Job 2: Build and push for main/tags (multi-platform)
+  build-and-push:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        # Multi-platform only on main/tags, single platform for PRs (faster)
-        platforms: ${{ github.event_name != 'pull_request' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        # Only use registry cache on main/tags (avoids auth issues on PRs)
-        cache-from: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache', env.DOCKERHUB_REPO) || 'type=gha' }}
-        cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache,mode=max', env.DOCKERHUB_REPO) || 'type=gha,mode=max' }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-    - name: Image digest
-      run: echo "Image published with digest ${{ steps.build.outputs.digest }}"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Summary - Published
-      if: github.event_name != 'pull_request'
-      run: |
-        echo "## Docker Image Published! 🚀" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Repository:** \`${{ env.DOCKERHUB_REPO }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Pull the image:**" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.DOCKERHUB_REPO }}:latest" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**View on DockerHub:** https://hub.docker.com/r/${{ env.DOCKERHUB_REPO }}" >> $GITHUB_STEP_SUMMARY
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_REPO }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value={{branch}}-{{sha}},enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
-    - name: Summary - PR Build Only
-      if: github.event_name == 'pull_request'
-      run: |
-        echo "## Docker Build Validated ✅" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Docker image built successfully for PR validation." >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Note:** Image was not pushed to DockerHub (PR builds are for validation only)." >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Once merged to main, the image will be published to:" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_REPO }}:latest\`" >> $GITHUB_STEP_SUMMARY
-        echo "- Version-specific tag from \`pyproject.toml\`" >> $GITHUB_STEP_SUMMARY
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build image (amd64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.DOCKERHUB_REPO }}:build-amd64
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache,mode=max
+
+      - name: Build image (arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/arm64
+          push: false
+          tags: ${{ env.DOCKERHUB_REPO }}:build-arm64
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-arm64
+          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-arm64,mode=max
+
+      - name: Push multi-platform image
+        uses: docker/build-push-action@v5
+        id: push
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache
+            type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-arm64
+
+      - name: Print image digest
+        run: |
+          echo "Image digest: ${{ steps.push.outputs.digest }}"
+
+      - name: Generate build summary
+        run: |
+          echo "## Docker Image Published! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** \`${{ env.DOCKERHUB_REPO }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull the image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_REPO }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**DockerHub:** https://hub.docker.com/r/${{ env.DOCKERHUB_REPO }}" >> $GITHUB_STEP_SUMMARY
