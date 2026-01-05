@@ -5,7 +5,7 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.1] - 2026-01-05
 
 ### Added
 - Individual source image export during composite generation
@@ -13,6 +13,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Output directories: `/tmp/germany/`, `/tmp/slovakia/`, `/tmp/czechia/`
   - Same timestamp-based filenames as composite (`{unix_timestamp}.png`)
 - `--no-individual` CLI flag for composite command to skip individual source images
+
+## [1.2.0] - 2025-12-14
+
+### Added
+- CHMI (Czech Hydrometeorological Institute) radar source support
+  - `maxz` product (maximum reflectivity)
+  - Coverage: Czech Republic (12.0°-19.0°E, 48.5°-51.1°N)
+- Composite radar generation from multiple sources
+  - New `composite` CLI command: `imeteo-radar composite`
+  - Merges DWD, SHMU, and CHMI using maximum reflectivity strategy
+  - Reprojection to common Web Mercator grid
+  - Configurable resolution (default: 500m)
+- Radar data availability monitoring tools
+
+### Changed
+- Vectorized coordinate transformations (100x speedup)
+- Updated Dockerfile for CHMI and composite support
+
+### Fixed
+- CHMI composite scaling, interpolation, and timestamp synchronization
+- Output format consistency across sources
+
+## [1.1.0] - 2025-11-20
+
+### Added
+- Time range filtering for backload functionality
+  - `--from` and `--to` arguments for specific time ranges
+  - Example: `--from "2024-09-25 10:00" --to "2024-09-25 16:00"`
+- Docker deployment with automated CI/CD
+  - GitHub Actions workflow for multi-platform builds
+  - DockerHub integration (`lfranko/imeteo-radar`)
+  - Docker Compose configuration for production
+
+### Changed
+- Memory optimization: reduced from 4.8GB to 669MB (86% improvement)
+- Optimized PNG file size with indexed palette compression
+
+### Fixed
+- Docker workflow auth issues on PRs
+- Various CLI bugs
 
 ## [1.0.0] - 2025-09-25
 
