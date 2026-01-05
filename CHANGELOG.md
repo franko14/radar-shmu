@@ -5,6 +5,15 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Individual source image export during composite generation
+  - Each source (DWD, SHMU, CHMI) now exports to its native grid alongside the composite
+  - Output directories: `/tmp/germany/`, `/tmp/slovakia/`, `/tmp/czechia/`
+  - Same timestamp-based filenames as composite (`{unix_timestamp}.png`)
+- `--no-individual` CLI flag for composite command to skip individual source images
+
 ## [1.0.0] - 2025-09-25
 
 ### Added

@@ -6,9 +6,7 @@ Separated into its own module to keep cli.py manageable.
 """
 
 from pathlib import Path
-from datetime import datetime
 from typing import Any
-import gc
 
 
 def composite_command_impl(args: Any) -> int:
@@ -69,6 +67,7 @@ def _process_latest(args, sources, exporter, output_dir):
     """Process latest available data from all sources
 
     Ensures all sources have data for the SAME timestamp before creating composite.
+    Also exports individual source images with their native extents.
     """
     from .processing.compositor import create_composite
     import json
@@ -120,6 +119,11 @@ def _process_latest(args, sources, exporter, output_dir):
     # Step 3: Process data for the common timestamp
     print(f"\n📡 Processing data for timestamp: {common_timestamp}...")
 
+    # Parse timestamp for filename generation
+    dt = datetime.strptime(common_timestamp[:14], "%Y%m%d%H%M%S")
+    dt_utc = pytz.UTC.localize(dt)
+    unix_timestamp = int(dt_utc.timestamp())
+
     sources_data = []
     for source_name, file_info in timestamp_groups[common_timestamp].items():
         source, product = sources[source_name]
@@ -131,6 +135,13 @@ def _process_latest(args, sources, exporter, output_dir):
             print(f"❌ Failed to process {source_name}: {e}")
             return 1
 
+    # Export individual source images (with native extents)
+    if not args.no_individual:
+        print("\n📸 Exporting individual source images...")
+        _export_individual_sources(
+            sources_data, exporter, unix_timestamp, common_timestamp, args
+        )
+
     # Create composite
     print("\n🎨 Creating composite...")
     composite = create_composite(
@@ -138,16 +149,12 @@ def _process_latest(args, sources, exporter, output_dir):
         resolution_m=args.resolution
     )
 
-    # Generate output filename using actual data timestamp (Unix timestamp format)
-    # Parse timestamp: YYYYMMDDHHMMSS -> Unix timestamp
-    dt = datetime.strptime(common_timestamp[:14], "%Y%m%d%H%M%S")
-    dt_utc = pytz.UTC.localize(dt)  # Make it UTC-aware
-    unix_timestamp = int(dt_utc.timestamp())
+    # Generate output filename
     filename = f"{unix_timestamp}.png"
     output_path = output_dir / filename
 
-    # Export to PNG
-    print(f"\n💾 Exporting to {filename} (timestamp: {common_timestamp})...")
+    # Export composite to PNG
+    print(f"\n💾 Exporting composite to {filename} (timestamp: {common_timestamp})...")
     radar_data_for_export = {
         'data': composite['data'],
         'timestamp': common_timestamp,
@@ -170,6 +177,79 @@ def _process_latest(args, sources, exporter, output_dir):
         _save_extent_index(output_dir, composite, list(sources.keys()), args.resolution)
 
     return 0
+
+
+def _export_individual_sources(sources_data, exporter, unix_timestamp, timestamp_str, args):
+    """Export individual source images with their native extents.
+
+    Each source is exported to its own directory:
+    - DWD -> /tmp/germany/
+    - SHMU -> /tmp/slovakia/
+    - CHMI -> /tmp/czechia/
+
+    Args:
+        sources_data: List of (source_name, radar_data) tuples
+        exporter: PNGExporter instance
+        unix_timestamp: Unix timestamp for filename
+        timestamp_str: Timestamp string for metadata
+        args: CLI arguments
+    """
+    import json
+
+    # Source name to output directory mapping
+    source_dirs = {
+        'dwd': Path('/tmp/germany/'),
+        'shmu': Path('/tmp/slovakia/'),
+        'chmi': Path('/tmp/czechia/'),
+    }
+
+    for source_name, radar_data in sources_data:
+        # Get output directory for this source
+        source_output_dir = source_dirs.get(source_name)
+        if source_output_dir is None:
+            print(f"⚠️  Unknown source {source_name}, skipping individual export")
+            continue
+
+        # Create output directory
+        source_output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate filename
+        filename = f"{unix_timestamp}.png"
+        output_path = source_output_dir / filename
+
+        # Prepare radar data for export
+        radar_data_for_export = {
+            'data': radar_data['data'],
+            'timestamp': timestamp_str,
+            'product': radar_data.get('product', 'unknown'),
+            'source': source_name,
+            'units': 'dBZ',
+            'metadata': radar_data.get('metadata', {})
+        }
+
+        # Export to PNG with native extent
+        print(f"   💾 {source_name.upper()} -> {output_path}")
+        exporter.export_png_fast(
+            radar_data=radar_data_for_export,
+            output_path=output_path,
+            extent=radar_data['extent'],
+            colormap_type='shmu'
+        )
+
+        # Save extent_index.json if it doesn't exist
+        extent_file = source_output_dir / 'extent_index.json'
+        if not extent_file.exists() or args.update_extent:
+            extent_data = {
+                "metadata": {
+                    "title": f"{source_name.upper()} Radar Coverage",
+                    "description": f"Native extent for {source_name.upper()} radar data",
+                    "source": source_name
+                },
+                "extent": radar_data['extent']
+            }
+            with open(extent_file, 'w') as f:
+                json.dump(extent_data, f, indent=2)
+            print(f"   📐 Saved extent to {extent_file}")
 
 
 def _process_backload(args, sources, exporter, output_dir):
@@ -246,6 +326,17 @@ def _process_backload(args, sources, exporter, output_dir):
             print(f"⚠️  Not enough valid sources for composite, skipping")
             continue
 
+        # Generate Unix timestamp for filenames
+        dt_obj = dt.strptime(timestamp, "%Y%m%d%H%M%S")
+        dt_obj = pytz.UTC.localize(dt_obj)
+        unix_timestamp = int(dt_obj.timestamp())
+
+        # Export individual source images (with native extents)
+        if not args.no_individual:
+            _export_individual_sources(
+                sources_data, exporter, unix_timestamp, timestamp, args
+            )
+
         # Create composite
         try:
             composite = create_composite(
@@ -253,15 +344,11 @@ def _process_backload(args, sources, exporter, output_dir):
                 resolution_m=args.resolution
             )
 
-            # Generate output filename using Unix timestamp
-            dt_obj = dt.strptime(timestamp, "%Y%m%d%H%M%S")
-            dt_obj = pytz.UTC.localize(dt_obj)
-            unix_timestamp = int(dt_obj.timestamp())
             filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
 
-            # Export to PNG
-            print(f"💾 Exporting to {filename} (timestamp: {timestamp})...")
+            # Export composite to PNG
+            print(f"💾 Exporting composite to {filename} (timestamp: {timestamp})...")
             radar_data_for_export = {
                 'data': composite['data'],
                 'timestamp': timestamp,

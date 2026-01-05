@@ -138,6 +138,11 @@ def create_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Force update extent_index.json file'
     )
+    composite_parser.add_argument(
+        '--no-individual',
+        action='store_true',
+        help='Skip generating individual source images (only create composite)'
+    )
 
     return parser
 
