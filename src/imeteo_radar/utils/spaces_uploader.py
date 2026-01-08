@@ -114,6 +114,8 @@ class SpacesUploader:
             folder = 'germany'
         elif source.lower() == 'shmu':
             folder = 'slovakia'
+        elif source.lower() == 'chmi':
+            folder = 'czechia'
         else:
             print(f"⚠️  Unknown source '{source}', defaulting to folder name: {source}")
             folder = source.lower()
@@ -162,6 +164,8 @@ class SpacesUploader:
             folder = 'germany'
         elif source.lower() == 'shmu':
             folder = 'slovakia'
+        elif source.lower() == 'chmi':
+            folder = 'czechia'
         else:
             folder = source.lower()
 
@@ -192,6 +196,8 @@ class SpacesUploader:
             folder = 'germany'
         elif source.lower() == 'shmu':
             folder = 'slovakia'
+        elif source.lower() == 'chmi':
+            folder = 'czechia'
         else:
             folder = source.lower()
 
