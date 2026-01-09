@@ -5,6 +5,18 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-01-09
+
+### Added
+- OMSZ (Hungarian Meteorological Service) radar source support
+  - `cmax` product (Column Maximum / ZMAX equivalent)
+  - Coverage: Hungary + surroundings (13.5°-25.5°E, 44.0°-50.5°N)
+  - Data from odp.met.hu open data portal (no authentication required)
+  - netCDF format with int8→uint8 conversion for correct dBZ scaling
+  - 5-minute update intervals, ~1km resolution (813×961 grid)
+- CLI support: `imeteo-radar fetch --source omsz`
+- netCDF4 dependency for OMSZ data processing
+
 ## [1.3.0] - 2026-01-09
 
 ### Added
