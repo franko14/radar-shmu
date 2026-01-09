@@ -29,9 +29,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     fetch_parser.add_argument(
         '--source',
-        choices=['dwd', 'shmu', 'chmi'],
+        choices=['dwd', 'shmu', 'chmi', 'arso'],
         default='dwd',
-        help='Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia)'
+        help='Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia)'
     )
     fetch_parser.add_argument(
         '--output',
@@ -78,7 +78,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     extent_parser.add_argument(
         '--source',
-        choices=['dwd', 'shmu', 'chmi', 'all'],
+        choices=['dwd', 'shmu', 'chmi', 'arso', 'all'],
         default='all',
         help='Radar source(s) to generate extent for'
     )
@@ -269,6 +269,7 @@ def fetch_command(args) -> int:
         from .sources.dwd import DWDRadarSource
         from .sources.shmu import SHMURadarSource
         from .sources.chmi import CHMIRadarSource
+        from .sources.arso import ARSORadarSource
         from .processing.exporter import PNGExporter
         from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
@@ -285,6 +286,10 @@ def fetch_command(args) -> int:
             source = CHMIRadarSource()
             product = 'maxz'
             country_dir = 'czechia'
+        elif args.source == 'arso':
+            source = ARSORadarSource()
+            product = 'zm'
+            country_dir = 'slovenia'
         else:
             print(f"❌ Unknown source: {args.source}")
             return 1
@@ -530,6 +535,7 @@ def extent_command(args) -> int:
         from .sources.dwd import DWDRadarSource
         from .sources.shmu import SHMURadarSource
         from .sources.chmi import CHMIRadarSource
+        from .sources.arso import ARSORadarSource
         import json
 
         sources_to_process = []
@@ -542,6 +548,9 @@ def extent_command(args) -> int:
 
         if args.source == 'all' or args.source == 'chmi':
             sources_to_process.append(('chmi', CHMIRadarSource(), 'czechia'))
+
+        if args.source == 'all' or args.source == 'arso':
+            sources_to_process.append(('arso', ARSORadarSource(), 'slovenia'))
 
         combined_extent = {
             "metadata": {
