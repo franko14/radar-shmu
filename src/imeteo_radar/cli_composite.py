@@ -15,6 +15,8 @@ def composite_command_impl(args: Any) -> int:
         from .sources.dwd import DWDRadarSource
         from .sources.shmu import SHMURadarSource
         from .sources.chmi import CHMIRadarSource
+        from .sources.arso import ARSORadarSource
+        from .sources.omsz import OMSZRadarSource
         from .processing.compositor import create_composite
         from .processing.exporter import PNGExporter
         from .cli import parse_time_range
@@ -38,6 +40,10 @@ def composite_command_impl(args: Any) -> int:
                 sources['shmu'] = (SHMURadarSource(), 'zmax')
             elif source_name == 'chmi':
                 sources['chmi'] = (CHMIRadarSource(), 'maxz')
+            elif source_name == 'arso':
+                sources['arso'] = (ARSORadarSource(), 'zm')
+            elif source_name == 'omsz':
+                sources['omsz'] = (OMSZRadarSource(), 'cmax')
             else:
                 print(f"❌ Unknown source: {source_name}")
                 return 1

@@ -29,9 +29,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     fetch_parser.add_argument(
         '--source',
-        choices=['dwd', 'shmu', 'chmi', 'arso'],
+        choices=['dwd', 'shmu', 'chmi', 'arso', 'omsz'],
         default='dwd',
-        help='Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia)'
+        help='Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary)'
     )
     fetch_parser.add_argument(
         '--output',
@@ -78,7 +78,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     extent_parser.add_argument(
         '--source',
-        choices=['dwd', 'shmu', 'chmi', 'arso', 'all'],
+        choices=['dwd', 'shmu', 'chmi', 'arso', 'omsz', 'all'],
         default='all',
         help='Radar source(s) to generate extent for'
     )
@@ -171,6 +171,27 @@ def parse_time_range(from_time: Optional[str], to_time: Optional[str],
         start = now - timedelta(minutes=30)  # Small window for latest
 
     return start, end
+
+
+def parse_timestamp_to_datetime(timestamp_str: str, source: str) -> datetime:
+    """Parse timestamp string to datetime based on source format
+
+    Args:
+        timestamp_str: Timestamp string from the source
+        source: Source name (dwd, shmu, chmi, arso, omsz)
+
+    Returns:
+        datetime object
+    """
+    if source == 'omsz':
+        # OMSZ format: YYYYMMDD_HHMM or YYYYMMDDHHMM
+        if '_' in timestamp_str:
+            return datetime.strptime(timestamp_str, "%Y%m%d_%H%M")
+        else:
+            return datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
+    else:
+        # DWD/SHMU/CHMI/ARSO format: YYYYMMDDHHMM00 (14 chars) or YYYYMMDDHHMM (12 chars)
+        return datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
 
 
 def generate_extent_info(source, source_name: str, country_dir: str) -> dict:
@@ -270,6 +291,7 @@ def fetch_command(args) -> int:
         from .sources.shmu import SHMURadarSource
         from .sources.chmi import CHMIRadarSource
         from .sources.arso import ARSORadarSource
+        from .sources.omsz import OMSZRadarSource
         from .processing.exporter import PNGExporter
         from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
@@ -290,6 +312,10 @@ def fetch_command(args) -> int:
             source = ARSORadarSource()
             product = 'zm'
             country_dir = 'slovenia'
+        elif args.source == 'omsz':
+            source = OMSZRadarSource()
+            product = 'cmax'
+            country_dir = 'hungary'
         else:
             print(f"❌ Unknown source: {args.source}")
             return 1
@@ -376,8 +402,8 @@ def fetch_command(args) -> int:
                 try:
                     # Extract timestamp for filename
                     timestamp_str = file_info['timestamp']
-                    # Convert YYYYMMDDHHMM00 to datetime and then to unix timestamp
-                    dt = datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
+                    # Convert to datetime using source-specific format
+                    dt = parse_timestamp_to_datetime(timestamp_str, args.source)
                     unix_timestamp = int(dt.timestamp())
                     filename = f"{unix_timestamp}.png"
                     output_path = output_dir / filename
@@ -446,7 +472,7 @@ def fetch_command(args) -> int:
 
             # Extract timestamp for filename
             timestamp_str = file_info['timestamp']
-            dt = datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
+            dt = parse_timestamp_to_datetime(timestamp_str, args.source)
             unix_timestamp = int(dt.timestamp())
             filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
@@ -536,6 +562,7 @@ def extent_command(args) -> int:
         from .sources.shmu import SHMURadarSource
         from .sources.chmi import CHMIRadarSource
         from .sources.arso import ARSORadarSource
+        from .sources.omsz import OMSZRadarSource
         import json
 
         sources_to_process = []
@@ -551,6 +578,9 @@ def extent_command(args) -> int:
 
         if args.source == 'all' or args.source == 'arso':
             sources_to_process.append(('arso', ARSORadarSource(), 'slovenia'))
+
+        if args.source == 'all' or args.source == 'omsz':
+            sources_to_process.append(('omsz', OMSZRadarSource(), 'hungary'))
 
         combined_extent = {
             "metadata": {
