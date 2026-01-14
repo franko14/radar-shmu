@@ -22,9 +22,24 @@ from typing import Optional
 try:
     import boto3
     from botocore.exceptions import ClientError, NoCredentialsError
+
     BOTO3_AVAILABLE = True
 except ImportError:
     BOTO3_AVAILABLE = False
+
+
+def _get_folder_for_source(source: str) -> str:
+    """Get Spaces folder name for a source using centralized registry.
+
+    Args:
+        source: Source identifier (e.g., 'dwd', 'shmu')
+
+    Returns:
+        Folder name for cloud storage (e.g., 'germany', 'slovakia')
+    """
+    from ..config.sources import get_folder_for_source
+
+    return get_folder_for_source(source)
 
 
 class SpacesUploader:
@@ -39,27 +54,27 @@ class SpacesUploader:
             )
 
         # Read environment variables
-        self.access_key = os.getenv('DIGITALOCEAN_SPACES_KEY')
-        self.secret_key = os.getenv('DIGITALOCEAN_SPACES_SECRET')
-        self.endpoint = os.getenv('DIGITALOCEAN_SPACES_ENDPOINT')
-        self.region = os.getenv('DIGITALOCEAN_SPACES_REGION')
-        self.bucket = os.getenv('DIGITALOCEAN_SPACES_BUCKET')
-        self.spaces_url = os.getenv('DIGITALOCEAN_SPACES_URL')
+        self.access_key = os.getenv("DIGITALOCEAN_SPACES_KEY")
+        self.secret_key = os.getenv("DIGITALOCEAN_SPACES_SECRET")
+        self.endpoint = os.getenv("DIGITALOCEAN_SPACES_ENDPOINT")
+        self.region = os.getenv("DIGITALOCEAN_SPACES_REGION")
+        self.bucket = os.getenv("DIGITALOCEAN_SPACES_BUCKET")
+        self.spaces_url = os.getenv("DIGITALOCEAN_SPACES_URL")
 
         # Validate required environment variables
         missing_vars = []
         if not self.access_key:
-            missing_vars.append('DIGITALOCEAN_SPACES_KEY')
+            missing_vars.append("DIGITALOCEAN_SPACES_KEY")
         if not self.secret_key:
-            missing_vars.append('DIGITALOCEAN_SPACES_SECRET')
+            missing_vars.append("DIGITALOCEAN_SPACES_SECRET")
         if not self.endpoint:
-            missing_vars.append('DIGITALOCEAN_SPACES_ENDPOINT')
+            missing_vars.append("DIGITALOCEAN_SPACES_ENDPOINT")
         if not self.region:
-            missing_vars.append('DIGITALOCEAN_SPACES_REGION')
+            missing_vars.append("DIGITALOCEAN_SPACES_REGION")
         if not self.bucket:
-            missing_vars.append('DIGITALOCEAN_SPACES_BUCKET')
+            missing_vars.append("DIGITALOCEAN_SPACES_BUCKET")
         if not self.spaces_url:
-            missing_vars.append('DIGITALOCEAN_SPACES_URL')
+            missing_vars.append("DIGITALOCEAN_SPACES_URL")
 
         if missing_vars:
             raise ValueError(
@@ -70,11 +85,11 @@ class SpacesUploader:
         # Initialize boto3 client
         try:
             self.s3_client = boto3.client(
-                's3',
+                "s3",
                 endpoint_url=self.endpoint,
                 aws_access_key_id=self.access_key,
                 aws_secret_access_key=self.secret_key,
-                region_name=self.region
+                region_name=self.region,
             )
 
             # Test connection by checking if bucket exists
@@ -83,15 +98,17 @@ class SpacesUploader:
         except NoCredentialsError:
             raise ValueError("Invalid DigitalOcean Spaces credentials")
         except ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-            if error_code == '404':
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            if error_code == "404":
                 raise ValueError(f"Bucket '{self.bucket}' not found")
-            elif error_code == '403':
+            elif error_code == "403":
                 raise ValueError(f"Access denied to bucket '{self.bucket}'")
             else:
                 raise ValueError(f"Failed to connect to DigitalOcean Spaces: {e}")
 
-    def upload_file(self, local_path: Path, source: str, filename: str) -> Optional[str]:
+    def upload_file(
+        self, local_path: Path, source: str, filename: str
+    ) -> Optional[str]:
         """
         Upload a file to DigitalOcean Spaces
 
@@ -109,16 +126,8 @@ class SpacesUploader:
             print(f"❌ Local file not found: {local_path}")
             return None
 
-        # Determine folder based on source
-        if source.lower() == 'dwd':
-            folder = 'germany'
-        elif source.lower() == 'shmu':
-            folder = 'slovakia'
-        elif source.lower() == 'chmi':
-            folder = 'czechia'
-        else:
-            print(f"⚠️  Unknown source '{source}', defaulting to folder name: {source}")
-            folder = source.lower()
+        # Determine folder based on source using centralized registry
+        folder = _get_folder_for_source(source)
 
         # Construct S3 key (path in Spaces)
         s3_key = f"iradar/{folder}/{filename}"
@@ -129,10 +138,7 @@ class SpacesUploader:
                 str(local_path),
                 self.bucket,
                 s3_key,
-                ExtraArgs={
-                    'ACL': 'public-read',
-                    'ContentType': 'image/png'
-                }
+                ExtraArgs={"ACL": "public-read", "ContentType": "image/png"},
             )
 
             # Construct public URL
@@ -159,15 +165,8 @@ class SpacesUploader:
         Returns:
             bool: True if deletion successful, False otherwise
         """
-        # Determine folder based on source
-        if source.lower() == 'dwd':
-            folder = 'germany'
-        elif source.lower() == 'shmu':
-            folder = 'slovakia'
-        elif source.lower() == 'chmi':
-            folder = 'czechia'
-        else:
-            folder = source.lower()
+        # Determine folder based on source using centralized registry
+        folder = _get_folder_for_source(source)
 
         # Construct S3 key
         s3_key = f"iradar/{folder}/{filename}"
@@ -191,34 +190,25 @@ class SpacesUploader:
         Returns:
             list: List of file keys in Spaces
         """
-        # Determine folder based on source
-        if source.lower() == 'dwd':
-            folder = 'germany'
-        elif source.lower() == 'shmu':
-            folder = 'slovakia'
-        elif source.lower() == 'chmi':
-            folder = 'czechia'
-        else:
-            folder = source.lower()
+        # Determine folder based on source using centralized registry
+        folder = _get_folder_for_source(source)
 
         # Construct S3 prefix
         s3_prefix = f"iradar/{folder}/{prefix}"
 
         try:
             response = self.s3_client.list_objects_v2(
-                Bucket=self.bucket,
-                Prefix=s3_prefix
+                Bucket=self.bucket, Prefix=s3_prefix
             )
 
-            if 'Contents' not in response:
+            if "Contents" not in response:
                 return []
 
-            return [obj['Key'] for obj in response['Contents']]
+            return [obj["Key"] for obj in response["Contents"]]
 
         except ClientError as e:
             print(f"❌ Failed to list files from Spaces: {e}")
             return []
-
 
 
 def is_spaces_configured() -> bool:
@@ -229,12 +219,12 @@ def is_spaces_configured() -> bool:
         bool: True if all required env vars are set, False otherwise
     """
     required_vars = [
-        'DIGITALOCEAN_SPACES_KEY',
-        'DIGITALOCEAN_SPACES_SECRET',
-        'DIGITALOCEAN_SPACES_ENDPOINT',
-        'DIGITALOCEAN_SPACES_REGION',
-        'DIGITALOCEAN_SPACES_BUCKET',
-        'DIGITALOCEAN_SPACES_URL'
+        "DIGITALOCEAN_SPACES_KEY",
+        "DIGITALOCEAN_SPACES_SECRET",
+        "DIGITALOCEAN_SPACES_ENDPOINT",
+        "DIGITALOCEAN_SPACES_REGION",
+        "DIGITALOCEAN_SPACES_BUCKET",
+        "DIGITALOCEAN_SPACES_URL",
     ]
 
     return all(os.getenv(var) for var in required_vars)

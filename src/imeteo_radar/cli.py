@@ -8,158 +8,141 @@ Focused on DWD dmax product with simple fetch command.
 import argparse
 import sys
 import time
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Tuple
 
 
 def create_parser() -> argparse.ArgumentParser:
     """Create command-line argument parser"""
     parser = argparse.ArgumentParser(
-        description="Weather radar data processor for DWD",
-        prog="imeteo-radar"
+        description="Weather radar data processor for DWD", prog="imeteo-radar"
     )
 
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Fetch command - simplified for DWD dmax
     fetch_parser = subparsers.add_parser(
-        'fetch',
-        help='Download and process radar data to PNG'
+        "fetch", help="Download and process radar data to PNG"
     )
     fetch_parser.add_argument(
-        '--source',
-        choices=['dwd', 'shmu', 'chmi', 'arso', 'omsz'],
-        default='dwd',
-        help='Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary)'
+        "--source",
+        choices=["dwd", "shmu", "chmi", "arso", "omsz"],
+        default="dwd",
+        help="Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary)",
     )
     fetch_parser.add_argument(
-        '--output',
-        type=Path,
-        help='Output directory (default: /tmp/{country}/)'
+        "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
     )
     fetch_parser.add_argument(
-        '--backload',
-        action='store_true',
-        help='Enable backload of historical data'
+        "--backload", action="store_true", help="Enable backload of historical data"
     )
+    fetch_parser.add_argument("--hours", type=int, help="Number of hours to backload")
     fetch_parser.add_argument(
-        '--hours',
-        type=int,
-        help='Number of hours to backload'
-    )
-    fetch_parser.add_argument(
-        '--from',
-        dest='from_time',
+        "--from",
+        dest="from_time",
         type=str,
-        help='Start time for backload (YYYY-MM-DD HH:MM)'
+        help="Start time for backload (YYYY-MM-DD HH:MM)",
     )
     fetch_parser.add_argument(
-        '--to',
-        dest='to_time',
+        "--to",
+        dest="to_time",
         type=str,
-        help='End time for backload (YYYY-MM-DD HH:MM)'
+        help="End time for backload (YYYY-MM-DD HH:MM)",
     )
     fetch_parser.add_argument(
-        '--update-extent',
-        action='store_true',
-        help='Force update extent_index.json file'
+        "--update-extent",
+        action="store_true",
+        help="Force update extent_index.json file",
     )
     fetch_parser.add_argument(
-        '--disable-upload',
-        action='store_true',
-        help='Disable upload to DigitalOcean Spaces (for local development only)'
+        "--disable-upload",
+        action="store_true",
+        help="Disable upload to DigitalOcean Spaces (for local development only)",
     )
 
     # Extent command - generate extent information only
     extent_parser = subparsers.add_parser(
-        'extent',
-        help='Generate extent information JSON'
+        "extent", help="Generate extent information JSON"
     )
     extent_parser.add_argument(
-        '--source',
-        choices=['dwd', 'shmu', 'chmi', 'arso', 'omsz', 'all'],
-        default='all',
-        help='Radar source(s) to generate extent for'
+        "--source",
+        choices=["dwd", "shmu", "chmi", "arso", "omsz", "all"],
+        default="all",
+        help="Radar source(s) to generate extent for",
     )
     extent_parser.add_argument(
-        '--output',
-        type=Path,
-        help='Output directory (default: /tmp/{country}/)'
+        "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
     )
 
     # Composite command - merge multiple sources
     composite_parser = subparsers.add_parser(
-        'composite',
-        help='Generate composite radar images from multiple sources'
+        "composite", help="Generate composite radar images from multiple sources"
     )
     composite_parser.add_argument(
-        '--sources',
+        "--sources",
         type=str,
-        default='dwd,shmu,chmi,omsz,arso',
-        help='Comma-separated list of sources to merge (default: dwd,shmu,chmi,omsz,arso)'
+        default="dwd,shmu,chmi,omsz,arso",
+        help="Comma-separated list of sources to merge (default: dwd,shmu,chmi,omsz,arso)",
     )
     composite_parser.add_argument(
-        '--output',
+        "--output",
         type=Path,
-        default=Path('/tmp/composite'),
-        help='Output directory (default: /tmp/composite/)'
+        default=Path("/tmp/composite"),
+        help="Output directory (default: /tmp/composite/)",
     )
     composite_parser.add_argument(
-        '--resolution',
+        "--resolution",
         type=float,
         default=500.0,
-        help='Target resolution in meters (default: 500)'
+        help="Target resolution in meters (default: 500)",
     )
     composite_parser.add_argument(
-        '--backload',
-        action='store_true',
-        help='Enable backload of historical data'
+        "--backload", action="store_true", help="Enable backload of historical data"
     )
     composite_parser.add_argument(
-        '--hours',
-        type=int,
-        help='Number of hours to backload'
+        "--hours", type=int, help="Number of hours to backload"
     )
     composite_parser.add_argument(
-        '--from',
-        dest='from_time',
+        "--from",
+        dest="from_time",
         type=str,
-        help='Start time for backload (format: "YYYY-MM-DD HH:MM")'
+        help='Start time for backload (format: "YYYY-MM-DD HH:MM")',
     )
     composite_parser.add_argument(
-        '--to',
-        dest='to_time',
+        "--to",
+        dest="to_time",
         type=str,
-        help='End time for backload (format: "YYYY-MM-DD HH:MM")'
+        help='End time for backload (format: "YYYY-MM-DD HH:MM")',
     )
     composite_parser.add_argument(
-        '--update-extent',
-        action='store_true',
-        help='Force update extent_index.json file'
+        "--update-extent",
+        action="store_true",
+        help="Force update extent_index.json file",
     )
     composite_parser.add_argument(
-        '--no-individual',
-        action='store_true',
-        help='Skip generating individual source images (only create composite)'
+        "--no-individual",
+        action="store_true",
+        help="Skip generating individual source images (only create composite)",
     )
     composite_parser.add_argument(
-        '--timestamp-tolerance',
+        "--timestamp-tolerance",
         type=int,
         default=2,
-        help='Timestamp matching tolerance in minutes (default: 2)'
+        help="Timestamp matching tolerance in minutes (default: 2)",
     )
     composite_parser.add_argument(
-        '--require-arso',
-        action='store_true',
-        help='Fail if ARSO data cannot be matched (default: fallback to composite without ARSO)'
+        "--require-arso",
+        action="store_true",
+        help="Fail if ARSO data cannot be matched (default: fallback to composite without ARSO)",
     )
 
     return parser
 
 
-def parse_time_range(from_time: Optional[str], to_time: Optional[str],
-                    hours: Optional[int]) -> Tuple[datetime, datetime]:
+def parse_time_range(
+    from_time: Optional[str], to_time: Optional[str], hours: Optional[int]
+) -> Tuple[datetime, datetime]:
     """Parse time range from arguments"""
     import pytz
 
@@ -194,9 +177,9 @@ def parse_timestamp_to_datetime(timestamp_str: str, source: str) -> datetime:
     Returns:
         datetime object
     """
-    if source == 'omsz':
+    if source == "omsz":
         # OMSZ format: YYYYMMDD_HHMM or YYYYMMDDHHMM
-        if '_' in timestamp_str:
+        if "_" in timestamp_str:
             return datetime.strptime(timestamp_str, "%Y%m%d_%H%M")
         else:
             return datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
@@ -216,15 +199,15 @@ def generate_extent_info(source, source_name: str, country_dir: str) -> dict:
         "name": source_name,
         "country": country_dir.capitalize(),
         "generated": datetime.now().isoformat() + "Z",
-        "extent": extent.get('wgs84', {}),
-        "projection": extent.get('projection', 'unknown'),
-        "grid_size": extent.get('grid_size', []),
-        "resolution_m": extent.get('resolution_m', [])
+        "extent": extent.get("wgs84", {}),
+        "projection": extent.get("projection", "unknown"),
+        "grid_size": extent.get("grid_size", []),
+        "resolution_m": extent.get("resolution_m", []),
     }
 
     # Add mercator bounds if available
-    if 'mercator' in extent:
-        extent_info['mercator'] = extent['mercator']
+    if "mercator" in extent:
+        extent_info["mercator"] = extent["mercator"]
 
     return extent_info
 
@@ -246,13 +229,13 @@ def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
             "description": "Geographic extent and projection information for radar data",
             "version": "1.0",
             "generated": extent_info["generated"],
-            "coordinate_system": "WGS84 geographic coordinates (EPSG:4326)"
+            "coordinate_system": "WGS84 geographic coordinates (EPSG:4326)",
         },
-        "source": extent_info
+        "source": extent_info,
     }
 
     # Save to file
-    with open(extent_file, 'w') as f:
+    with open(extent_file, "w") as f:
         json.dump(extent_data, f, indent=2)
 
     print(f"💾 Saved extent information to: {extent_file}")
@@ -276,7 +259,7 @@ def cleanup_old_files(output_dir: Path, max_age_hours: int = 6):
 
     for png_file in output_dir.glob("*.png"):
         # Skip extent_index.json and other non-PNG files
-        if png_file.suffix != '.png':
+        if png_file.suffix != ".png":
             continue
 
         # Check file age
@@ -290,7 +273,9 @@ def cleanup_old_files(output_dir: Path, max_age_hours: int = 6):
                 print(f"⚠️  Failed to delete {png_file.name}: {e}")
 
     if deleted_count > 0:
-        print(f"🗑️  Cleaned up {deleted_count} old PNG files (older than {max_age_hours}h)")
+        print(
+            f"🗑️  Cleaned up {deleted_count} old PNG files (older than {max_age_hours}h)"
+        )
 
 
 def fetch_command(args) -> int:
@@ -298,38 +283,19 @@ def fetch_command(args) -> int:
 
     # Import here to avoid circular imports and speed up CLI startup
     try:
-        from .sources.dwd import DWDRadarSource
-        from .sources.shmu import SHMURadarSource
-        from .sources.chmi import CHMIRadarSource
-        from .sources.arso import ARSORadarSource
-        from .sources.omsz import OMSZRadarSource
+        from .config.sources import get_source_config, get_source_instance
         from .processing.exporter import PNGExporter
         from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
-        # Initialize source based on selection
-        if args.source == 'dwd':
-            source = DWDRadarSource()
-            product = 'dmax'
-            country_dir = 'germany'
-        elif args.source == 'shmu':
-            source = SHMURadarSource()
-            product = 'zmax'
-            country_dir = 'slovakia'
-        elif args.source == 'chmi':
-            source = CHMIRadarSource()
-            product = 'maxz'
-            country_dir = 'czechia'
-        elif args.source == 'arso':
-            source = ARSORadarSource()
-            product = 'zm'
-            country_dir = 'slovenia'
-        elif args.source == 'omsz':
-            source = OMSZRadarSource()
-            product = 'cmax'
-            country_dir = 'hungary'
-        else:
+        # Initialize source using centralized registry
+        source_config = get_source_config(args.source)
+        if not source_config:
             print(f"❌ Unknown source: {args.source}")
             return 1
+
+        source = get_source_instance(args.source)
+        product = source_config["product"]
+        country_dir = source_config["country"]
 
         exporter = PNGExporter()
 
@@ -347,7 +313,9 @@ def fetch_command(args) -> int:
                     print("⚠️  Falling back to local-only mode (upload disabled)")
                     upload_enabled = False
             else:
-                print("⚠️  DigitalOcean Spaces not configured (missing environment variables)")
+                print(
+                    "⚠️  DigitalOcean Spaces not configured (missing environment variables)"
+                )
                 print("⚠️  Falling back to local-only mode (upload disabled)")
                 upload_enabled = False
         else:
@@ -364,7 +332,9 @@ def fetch_command(args) -> int:
 
         # Generate and save extent information on first run or if requested
         extent_info = generate_extent_info(source, args.source.upper(), country_dir)
-        save_extent_index(output_dir, extent_info, force=getattr(args, 'update_extent', False))
+        save_extent_index(
+            output_dir, extent_info, force=getattr(args, "update_extent", False)
+        )
 
         print(f"📡 Fetching {args.source.upper()} {product} radar data...")
         print(f"📁 Output directory: {output_dir}")
@@ -373,7 +343,9 @@ def fetch_command(args) -> int:
             # Handle backload
             start, end = parse_time_range(args.from_time, args.to_time, args.hours)
 
-            print(f"⏰ Backload period: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}")
+            print(
+                f"⏰ Backload period: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}"
+            )
 
             # Calculate number of 5-minute intervals
             time_diff = end - start
@@ -385,20 +357,17 @@ def fetch_command(args) -> int:
             print(f"📥 Downloading up to {intervals} timestamps...")
 
             # Download data (don't use LATEST for backload)
-            if args.source == 'dwd':
+            if args.source == "dwd":
                 files = source.download_latest(
                     count=intervals,
                     products=[product],
                     use_latest=False,
                     start_time=start,
-                    end_time=end
+                    end_time=end,
                 )
             else:  # SHMU
                 files = source.download_latest(
-                    count=intervals,
-                    products=[product],
-                    start_time=start,
-                    end_time=end
+                    count=intervals, products=[product], start_time=start, end_time=end
                 )
 
             if not files:
@@ -412,7 +381,7 @@ def fetch_command(args) -> int:
             for file_info in files:
                 try:
                     # Extract timestamp for filename
-                    timestamp_str = file_info['timestamp']
+                    timestamp_str = file_info["timestamp"]
                     # Convert to datetime using source-specific format
                     dt = parse_timestamp_to_datetime(timestamp_str, args.source)
                     unix_timestamp = int(dt.timestamp())
@@ -420,15 +389,15 @@ def fetch_command(args) -> int:
                     output_path = output_dir / filename
 
                     # Process to array
-                    radar_data = source.process_to_array(file_info['path'])
+                    radar_data = source.process_to_array(file_info["path"])
 
                     # Prepare data for PNG export
                     export_data = {
-                        'data': radar_data['data'],
-                        'timestamp': timestamp_str,
-                        'product': product,
-                        'source': args.source,
-                        'units': 'dBZ'
+                        "data": radar_data["data"],
+                        "timestamp": timestamp_str,
+                        "product": product,
+                        "source": args.source,
+                        "units": "dBZ",
                     }
 
                     # Export to PNG (using fast method to reduce memory usage)
@@ -437,7 +406,7 @@ def fetch_command(args) -> int:
                         radar_data=export_data,
                         output_path=output_path,
                         extent=extent,
-                        colormap_type='reflectivity_shmu'  # Use SHMU colormap for consistency
+                        colormap_type="reflectivity_shmu",  # Use SHMU colormap for consistency
                     )
 
                     print(f"💾 Saved: {output_path}")
@@ -448,9 +417,11 @@ def fetch_command(args) -> int:
                         uploader.upload_file(output_path, args.source, filename)
 
                     # Clean up matplotlib and numpy memory after each file
-                    import matplotlib.pyplot as plt
                     import gc
-                    plt.close('all')
+
+                    import matplotlib.pyplot as plt
+
+                    plt.close("all")
                     gc.collect()
 
                 except Exception as e:
@@ -470,8 +441,10 @@ def fetch_command(args) -> int:
             # Just fetch latest using LATEST endpoint
             print("📥 Downloading latest timestamp...")
 
-            if args.source == 'dwd':
-                files = source.download_latest(count=1, products=[product], use_latest=True)
+            if args.source == "dwd":
+                files = source.download_latest(
+                    count=1, products=[product], use_latest=True
+                )
             else:  # SHMU
                 files = source.download_latest(count=1, products=[product])
 
@@ -482,22 +455,22 @@ def fetch_command(args) -> int:
             file_info = files[0]
 
             # Extract timestamp for filename
-            timestamp_str = file_info['timestamp']
+            timestamp_str = file_info["timestamp"]
             dt = parse_timestamp_to_datetime(timestamp_str, args.source)
             unix_timestamp = int(dt.timestamp())
             filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
 
             # Process to array
-            radar_data = source.process_to_array(file_info['path'])
+            radar_data = source.process_to_array(file_info["path"])
 
             # Prepare data for PNG export
             export_data = {
-                'data': radar_data['data'],
-                'timestamp': timestamp_str,
-                'product': product,
-                'source': args.source,
-                'units': 'dBZ'
+                "data": radar_data["data"],
+                "timestamp": timestamp_str,
+                "product": product,
+                "source": args.source,
+                "units": "dBZ",
             }
 
             # Export to PNG (using fast method to reduce memory usage)
@@ -506,7 +479,7 @@ def fetch_command(args) -> int:
                 radar_data=export_data,
                 output_path=output_path,
                 extent=extent,
-                colormap_type='reflectivity_shmu'
+                colormap_type="reflectivity_shmu",
             )
 
             print(f"✅ Saved: {output_path}")
@@ -531,7 +504,7 @@ def fetch_command(args) -> int:
         print(f"❌ Error: {e}")
         # Try to clean up if source exists
         try:
-            if 'source' in locals():
+            if "source" in locals():
                 source.cleanup_temp_files()
         except:
             pass
@@ -548,11 +521,11 @@ def main():
         return 1
 
     try:
-        if args.command == 'fetch':
+        if args.command == "fetch":
             return fetch_command(args)
-        elif args.command == 'extent':
+        elif args.command == "extent":
             return extent_command(args)
-        elif args.command == 'composite':
+        elif args.command == "composite":
             return composite_command(args)
         else:
             print(f"Unknown command: {args.command}")
@@ -569,29 +542,24 @@ def main():
 def extent_command(args) -> int:
     """Handle extent generation command"""
     try:
-        from .sources.dwd import DWDRadarSource
-        from .sources.shmu import SHMURadarSource
-        from .sources.chmi import CHMIRadarSource
-        from .sources.arso import ARSORadarSource
-        from .sources.omsz import OMSZRadarSource
         import json
 
+        from .config.sources import (
+            get_all_source_names,
+            get_source_config,
+            get_source_instance,
+        )
+
+        # Build list of sources to process
         sources_to_process = []
+        source_names = get_all_source_names() if args.source == "all" else [args.source]
 
-        if args.source == 'all' or args.source == 'dwd':
-            sources_to_process.append(('dwd', DWDRadarSource(), 'germany'))
-
-        if args.source == 'all' or args.source == 'shmu':
-            sources_to_process.append(('shmu', SHMURadarSource(), 'slovakia'))
-
-        if args.source == 'all' or args.source == 'chmi':
-            sources_to_process.append(('chmi', CHMIRadarSource(), 'czechia'))
-
-        if args.source == 'all' or args.source == 'arso':
-            sources_to_process.append(('arso', ARSORadarSource(), 'slovenia'))
-
-        if args.source == 'all' or args.source == 'omsz':
-            sources_to_process.append(('omsz', OMSZRadarSource(), 'hungary'))
+        for source_name in source_names:
+            config = get_source_config(source_name)
+            if config:
+                sources_to_process.append(
+                    (source_name, get_source_instance(source_name), config["country"])
+                )
 
         combined_extent = {
             "metadata": {
@@ -601,16 +569,18 @@ def extent_command(args) -> int:
                 "generated": datetime.now().isoformat() + "Z",
                 "coordinate_systems": {
                     "wgs84": "WGS84 geographic coordinates (EPSG:4326)"
-                }
+                },
             },
-            "sources": {}
+            "sources": {},
         }
 
         for source_name, source_obj, country_dir in sources_to_process:
             print(f"📡 Generating extent for {source_name.upper()}...")
 
             # Get extent information
-            extent_info = generate_extent_info(source_obj, source_name.upper(), country_dir)
+            extent_info = generate_extent_info(
+                source_obj, source_name.upper(), country_dir
+            )
 
             # Save individual extent file
             if args.output:
@@ -625,9 +595,9 @@ def extent_command(args) -> int:
             combined_extent["sources"][source_name] = extent_info
 
         # If processing all sources, save combined file
-        if args.source == 'all':
+        if args.source == "all":
             combined_file = Path("/tmp/radar_extent_combined.json")
-            with open(combined_file, 'w') as f:
+            with open(combined_file, "w") as f:
                 json.dump(combined_extent, f, indent=2)
             print(f"💾 Saved combined extent to: {combined_file}")
 
@@ -644,6 +614,7 @@ def extent_command(args) -> int:
 def composite_command(args) -> int:
     """Handle composite generation command"""
     from .cli_composite import composite_command_impl
+
     return composite_command_impl(args)
 
 

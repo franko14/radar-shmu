@@ -5,6 +5,30 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-01-14
+
+### Changed
+- **Major refactoring**: Centralized source configuration with new `SOURCE_REGISTRY`
+  - New `src/imeteo_radar/config/sources.py` provides single source of truth
+  - All 5 sources (DWD, SHMU, CHMI, ARSO, OMSZ) configured in one place
+  - Dynamic source instantiation via `get_source_instance()`
+  - Eliminates ~150 lines of duplicated configuration across CLI modules
+- Moved `cleanup_temp_files()` method to `RadarSource` base class
+  - Removes ~75 lines of identical code from DWD, SHMU, CHMI, ARSO sources
+  - OMSZ retains custom override for directory cleanup logic
+- Simplified `fetch_command()` in CLI from if/elif chains to registry lookup
+- Simplified `extent_command()` to use registry-based iteration
+- Consolidated `spaces_uploader.py` source folder mapping using registry
+
+### Removed
+- Dead commented precipitation colormap code from `exporter.py` (~30 lines)
+- Duplicated source configuration mappings from `cli.py`, `cli_composite.py`
+
+### Technical
+- Total code reduction: ~335 lines of duplicated/dead code removed
+- No functional changes to output - all existing behavior preserved
+- All tests passing, code formatted with black/isort
+
 ## [1.5.0] - 2026-01-14
 
 ### Added

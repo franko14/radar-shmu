@@ -6,11 +6,12 @@ Combines data from multiple radar sources (DWD, SHMU, CHMI) using maximum
 reflectivity strategy. Handles reprojection to common Web Mercator grid.
 """
 
-import numpy as np
-from typing import Dict, Any, List, Tuple, Optional
-from scipy.interpolate import RegularGridInterpolator
 import gc
 import warnings
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+from scipy.interpolate import RegularGridInterpolator
 
 from ..core.base import lonlat_to_mercator, mercator_to_lonlat
 from ..core.projection import ProjectionHandler
@@ -50,9 +51,7 @@ class RadarCompositor:
 
         # Initialize composite array with NaN
         self.composite_data = np.full(
-            (self.grid_height, self.grid_width),
-            np.nan,
-            dtype=np.float32
+            (self.grid_height, self.grid_width), np.nan, dtype=np.float32
         )
 
         self.sources_merged = []
@@ -62,12 +61,10 @@ class RadarCompositor:
 
         # Convert extent to Web Mercator
         west_m, south_m = lonlat_to_mercator(
-            self.target_extent['west'],
-            self.target_extent['south']
+            self.target_extent["west"], self.target_extent["south"]
         )
         east_m, north_m = lonlat_to_mercator(
-            self.target_extent['east'],
-            self.target_extent['north']
+            self.target_extent["east"], self.target_extent["north"]
         )
 
         # Calculate grid dimensions based on resolution
@@ -79,20 +76,24 @@ class RadarCompositor:
 
         # Store mercator bounds
         self.mercator_bounds = {
-            'west': west_m,
-            'east': east_m,
-            'south': south_m,
-            'north': north_m
+            "west": west_m,
+            "east": east_m,
+            "south": south_m,
+            "north": north_m,
         }
 
         # Create coordinate arrays for target grid
         self.target_x = np.linspace(west_m, east_m, self.grid_width)
         self.target_y = np.linspace(north_m, south_m, self.grid_height)
 
-        print(f"🎯 Target grid: {self.grid_width}×{self.grid_height} pixels "
-              f"@ {self.resolution_m}m resolution")
-        print(f"   Extent: {self.target_extent['west']:.2f}°E to {self.target_extent['east']:.2f}°E, "
-              f"{self.target_extent['south']:.2f}°N to {self.target_extent['north']:.2f}°N")
+        print(
+            f"🎯 Target grid: {self.grid_width}×{self.grid_height} pixels "
+            f"@ {self.resolution_m}m resolution"
+        )
+        print(
+            f"   Extent: {self.target_extent['west']:.2f}°E to {self.target_extent['east']:.2f}°E, "
+            f"{self.target_extent['south']:.2f}°N to {self.target_extent['north']:.2f}°N"
+        )
 
     def add_source(self, source_name: str, radar_data: Dict[str, Any]) -> bool:
         """
@@ -114,8 +115,8 @@ class RadarCompositor:
 
         try:
             # Extract data
-            source_data = radar_data['data']
-            coordinates = radar_data['coordinates']
+            source_data = radar_data["data"]
+            coordinates = radar_data["coordinates"]
 
             # Generate coordinates if not provided (lazy generation with caching)
             if coordinates is None:
@@ -123,9 +124,9 @@ class RadarCompositor:
                 if cache_key not in self.coordinate_cache:
                     print(f"   Generating coordinates from HDF5 metadata...")
                     coordinates = self._generate_coordinates_from_metadata(
-                        radar_data['dimensions'],
-                        radar_data['extent'],
-                        radar_data.get('projection')
+                        radar_data["dimensions"],
+                        radar_data["extent"],
+                        radar_data.get("projection"),
                     )
                     self.coordinate_cache[cache_key] = coordinates
                 else:
@@ -133,8 +134,8 @@ class RadarCompositor:
                     coordinates = self.coordinate_cache[cache_key]
 
             # Get source coordinates
-            source_lons = coordinates['lons']
-            source_lats = coordinates['lats']
+            source_lons = coordinates["lons"]
+            source_lats = coordinates["lats"]
 
             # Handle 1D coordinate arrays (SHMU/CHMI style) - keep as 1D for RegularGridInterpolator
             if source_lons.ndim == 1 and source_lats.ndim == 1:
@@ -152,8 +153,12 @@ class RadarCompositor:
             source_lons_2d, source_lats_2d = np.meshgrid(source_lon_1d, source_lat_1d)
 
             # Convert to Mercator using vectorized operation (100-1000x faster!)
-            print(f"   Converting {source_lons_2d.size:,} coordinates to Mercator (vectorized)...")
-            source_x_2d, source_y_2d = lonlat_to_mercator(source_lons_2d, source_lats_2d)
+            print(
+                f"   Converting {source_lons_2d.size:,} coordinates to Mercator (vectorized)..."
+            )
+            source_x_2d, source_y_2d = lonlat_to_mercator(
+                source_lons_2d, source_lats_2d
+            )
 
             # Create 1D coordinate vectors in Mercator (for RegularGridInterpolator)
             source_x_1d = source_x_2d[0, :]  # X varies along columns
@@ -168,8 +173,10 @@ class RadarCompositor:
                 print(f"⚠️  No valid data in {source_name}, skipping")
                 return False
 
-            print(f"   Valid pixels: {valid_count:,} / {total_count:,} "
-                  f"({100*valid_count/total_count:.1f}%)")
+            print(
+                f"   Valid pixels: {valid_count:,} / {total_count:,} "
+                f"({100*valid_count/total_count:.1f}%)"
+            )
 
             # Create RegularGridInterpolator with source data
             # Use 'nearest' method to preserve discrete dBZ values and avoid smoothing
@@ -177,9 +184,9 @@ class RadarCompositor:
             interpolator = RegularGridInterpolator(
                 (source_y_1d, source_x_1d),  # Note: y first (rows), x second (cols)
                 source_data,
-                method='nearest',
+                method="nearest",
                 bounds_error=False,
-                fill_value=np.nan
+                fill_value=np.nan,
             )
 
             # Create target grid points
@@ -222,12 +229,16 @@ class RadarCompositor:
         except Exception as e:
             print(f"❌ Failed to merge {source_name}: {e}")
             import traceback
+
             traceback.print_exc()
             return False
 
-    def _generate_coordinates_from_metadata(self, dimensions: Tuple[int, int],
-                                           extent: Dict[str, Any],
-                                           projection_info: Optional[Dict[str, Any]]) -> Dict[str, np.ndarray]:
+    def _generate_coordinates_from_metadata(
+        self,
+        dimensions: Tuple[int, int],
+        extent: Dict[str, Any],
+        projection_info: Optional[Dict[str, Any]],
+    ) -> Dict[str, np.ndarray]:
         """
         Generate coordinates from real HDF5 metadata.
 
@@ -242,22 +253,22 @@ class RadarCompositor:
         Returns:
             Dict with 'lons' and 'lats' arrays (1D or 2D depending on projection)
         """
-        if projection_info and projection_info.get('type') == 'stereographic':
+        if projection_info and projection_info.get("type") == "stereographic":
             # DWD: Use projection_handler with REAL HDF5 metadata
             print(f"      Using stereographic projection from HDF5...")
             lons, lats = self.projection_handler.create_dwd_coordinates(
                 shape=dimensions,
-                where_attrs=projection_info['where_attrs'],  # Real HDF5 data
-                proj_def=projection_info['proj_def']         # Real HDF5 data
+                where_attrs=projection_info["where_attrs"],  # Real HDF5 data
+                proj_def=projection_info["proj_def"],  # Real HDF5 data
             )
-            return {'lons': lons, 'lats': lats}
+            return {"lons": lons, "lats": lats}
         else:
             # SHMU/CHMI: Web Mercator - simple grid from real corner coordinates
             print(f"      Using Web Mercator grid from HDF5 corner coordinates...")
-            wgs84 = extent['wgs84']
-            lons = np.linspace(wgs84['west'], wgs84['east'], dimensions[1])
-            lats = np.linspace(wgs84['north'], wgs84['south'], dimensions[0])
-            return {'lons': lons, 'lats': lats}
+            wgs84 = extent["wgs84"]
+            lons = np.linspace(wgs84["west"], wgs84["east"], dimensions[1])
+            lats = np.linspace(wgs84["north"], wgs84["south"], dimensions[0])
+            return {"lons": lons, "lats": lats}
 
     def get_composite(self) -> Dict[str, Any]:
         """
@@ -279,15 +290,15 @@ class RadarCompositor:
         coverage = 100 * valid_pixels / total_pixels
 
         return {
-            'data': self.composite_data,
-            'extent': self.target_extent,
-            'mercator_bounds': self.mercator_bounds,
-            'resolution_m': self.resolution_m,
-            'grid_size': (self.grid_height, self.grid_width),
-            'sources': self.sources_merged,
-            'coverage_percent': coverage,
-            'valid_pixels': valid_pixels,
-            'total_pixels': total_pixels
+            "data": self.composite_data,
+            "extent": self.target_extent,
+            "mercator_bounds": self.mercator_bounds,
+            "resolution_m": self.resolution_m,
+            "grid_size": (self.grid_height, self.grid_width),
+            "sources": self.sources_merged,
+            "coverage_percent": coverage,
+            "valid_pixels": valid_pixels,
+            "total_pixels": total_pixels,
         }
 
     def get_summary(self) -> str:
@@ -296,9 +307,9 @@ class RadarCompositor:
         composite = self.get_composite()
 
         summary = [
-            "\n" + "="*60,
+            "\n" + "=" * 60,
             "RADAR COMPOSITE SUMMARY",
-            "="*60,
+            "=" * 60,
             f"Sources merged: {', '.join(composite['sources']).upper()}",
             f"Grid size: {composite['grid_size'][1]}×{composite['grid_size'][0]} pixels",
             f"Resolution: {composite['resolution_m']}m",
@@ -306,15 +317,17 @@ class RadarCompositor:
             f"        {composite['extent']['south']:.2f}°N to {composite['extent']['north']:.2f}°N",
             f"Coverage: {composite['coverage_percent']:.1f}% "
             f"({composite['valid_pixels']:,} / {composite['total_pixels']:,} pixels)",
-            "="*60
+            "=" * 60,
         ]
 
         return "\n".join(summary)
 
 
-def create_composite(sources_data: List[Tuple[str, Dict[str, Any]]],
-                    resolution_m: float = 500.0,
-                    custom_extent: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+def create_composite(
+    sources_data: List[Tuple[str, Dict[str, Any]]],
+    resolution_m: float = 500.0,
+    custom_extent: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
     """
     Convenience function to create a composite from multiple sources.
 
@@ -335,9 +348,9 @@ def create_composite(sources_data: List[Tuple[str, Dict[str, Any]]],
         ... ])
     """
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("CREATING RADAR COMPOSITE")
-    print("="*60)
+    print("=" * 60)
 
     if not sources_data:
         raise ValueError("No source data provided")
@@ -348,22 +361,24 @@ def create_composite(sources_data: List[Tuple[str, Dict[str, Any]]],
 
         all_extents = []
         for source_name, radar_data in sources_data:
-            if 'extent' in radar_data and 'wgs84' in radar_data['extent']:
-                all_extents.append(radar_data['extent']['wgs84'])
+            if "extent" in radar_data and "wgs84" in radar_data["extent"]:
+                all_extents.append(radar_data["extent"]["wgs84"])
 
         if not all_extents:
             raise ValueError("No extent information found in source data")
 
         # Calculate combined bounds
         custom_extent = {
-            'west': min(ext['west'] for ext in all_extents),
-            'east': max(ext['east'] for ext in all_extents),
-            'south': min(ext['south'] for ext in all_extents),
-            'north': max(ext['north'] for ext in all_extents)
+            "west": min(ext["west"] for ext in all_extents),
+            "east": max(ext["east"] for ext in all_extents),
+            "south": min(ext["south"] for ext in all_extents),
+            "north": max(ext["north"] for ext in all_extents),
         }
 
-        print(f"   Combined extent: {custom_extent['west']:.2f}° to {custom_extent['east']:.2f}°E, "
-              f"{custom_extent['south']:.2f}° to {custom_extent['north']:.2f}°N")
+        print(
+            f"   Combined extent: {custom_extent['west']:.2f}° to {custom_extent['east']:.2f}°E, "
+            f"{custom_extent['south']:.2f}° to {custom_extent['north']:.2f}°N"
+        )
 
     # Create compositor
     compositor = RadarCompositor(custom_extent, resolution_m)
