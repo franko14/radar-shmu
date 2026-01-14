@@ -10,12 +10,13 @@ Documentation: https://meteo.arso.gov.si/uploads/meteo/help/sl/SRD3Format.html
 """
 
 import os
-import numpy as np
-import requests
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import requests
 from pyproj import CRS, Transformer
 
 from ..core.base import RadarSource, lonlat_to_mercator
@@ -28,18 +29,18 @@ class ARSORadarSource(RadarSource):
 
     # Product mapping: internal name -> (filename, description)
     PRODUCTS = {
-        'zm': {
-            'file': 'si0-zm.srd',
-            'name': 'Maximum Reflectivity (ZM)',
-            'units': 'dBZ',
-            'description': 'Column maximum reflectivity'
+        "zm": {
+            "file": "si0-zm.srd",
+            "name": "Maximum Reflectivity (ZM)",
+            "units": "dBZ",
+            "description": "Column maximum reflectivity",
         },
-        'rrg': {
-            'file': 'si0-rrg.srd',
-            'name': 'Ground Rain Rate (RRG)',
-            'units': 'dBR/h',
-            'description': 'Precipitation intensity at ground level'
-        }
+        "rrg": {
+            "file": "si0-rrg.srd",
+            "name": "Ground Rain Rate (RRG)",
+            "units": "dBR/h",
+            "description": "Precipitation intensity at ground level",
+        },
     }
 
     # SIRAD projection parameters (from SRD-3 specification)
@@ -59,9 +60,7 @@ class ARSORadarSource(RadarSource):
 
     def __init__(self):
         super().__init__("arso")
-
-        # Track temporary files for cleanup
-        self.temp_files = {}
+        # temp_files is initialized in base class
 
         # Initialize projection transformer
         self.sirad_crs = CRS.from_proj4(self.SIRAD_PROJ4)
@@ -82,11 +81,7 @@ class ARSORadarSource(RadarSource):
     def get_product_metadata(self, product: str) -> Dict[str, Any]:
         """Get metadata for a specific ARSO product"""
         if product in self.PRODUCTS:
-            return {
-                'product': product,
-                'source': self.name,
-                **self.PRODUCTS[product]
-            }
+            return {"product": product, "source": self.name, **self.PRODUCTS[product]}
         return super().get_product_metadata(product)
 
     def _get_product_url(self, product: str) -> str:
@@ -94,7 +89,7 @@ class ARSORadarSource(RadarSource):
         if product not in self.PRODUCTS:
             raise ValueError(f"Unknown product: {product}")
 
-        filename = self.PRODUCTS[product]['file']
+        filename = self.PRODUCTS[product]["file"]
         return f"{self.BASE_URL}/{filename}"
 
     def _parse_srd_header(self, content: str) -> Dict[str, Any]:
@@ -103,15 +98,15 @@ class ARSORadarSource(RadarSource):
         Header format: "key value1 value2 ... # optional comment"
         """
         header = {}
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         for line in lines:
             # Stop at DATA marker
-            if line.strip() == 'DATA':
+            if line.strip() == "DATA":
                 break
 
             # Remove comments and strip whitespace
-            line = line.split('#')[0].strip()
+            line = line.split("#")[0].strip()
             if not line:
                 continue
 
@@ -154,26 +149,26 @@ class ARSORadarSource(RadarSource):
         Values are calculated as: value = start + slope * (byte_value - offset)
         """
         # Find DATA marker
-        data_start = content.find('\nDATA\n')
+        data_start = content.find("\nDATA\n")
         if data_start == -1:
-            data_start = content.find('\nDATA\r\n')
+            data_start = content.find("\nDATA\r\n")
         if data_start == -1:
             raise ValueError("No DATA marker found in SRD file")
 
         # Extract data section (everything after DATA\n)
-        data_section = content[data_start + 6:]  # Skip "\nDATA\n"
+        data_section = content[data_start + 6 :]  # Skip "\nDATA\n"
 
         # Get grid dimensions from header
-        ncell = header.get('ncell', self.GRID_NCELL)
+        ncell = header.get("ncell", self.GRID_NCELL)
         if isinstance(ncell, list):
             width, height = ncell[0], ncell[1]
         else:
             width, height = self.GRID_NCELL
 
         # Get quantization parameters
-        offset = header.get('offset', 64)
-        start = header.get('start', 12.0)
-        slope = header.get('slope', 3.0)
+        offset = header.get("offset", 64)
+        start = header.get("start", 12.0)
+        slope = header.get("slope", 3.0)
 
         # Parse data - each character represents one byte value
         # Data is organized: k (vertical), j (meridional, N-S), i (zonal, W-E)
@@ -194,8 +189,9 @@ class ARSORadarSource(RadarSource):
         if len(raw_array) < expected_size:
             print(f"Warning: Expected {expected_size} values, got {len(raw_array)}")
             # Pad with nodata
-            raw_array = np.pad(raw_array, (0, expected_size - len(raw_array)),
-                              constant_values=offset)
+            raw_array = np.pad(
+                raw_array, (0, expected_size - len(raw_array)), constant_values=offset
+            )
         elif len(raw_array) > expected_size:
             raw_array = raw_array[:expected_size]
 
@@ -248,19 +244,19 @@ class ARSORadarSource(RadarSource):
 
         # Calculate extent
         self._extent_wgs84 = {
-            'west': float(np.min(lons)),
-            'east': float(np.max(lons)),
-            'south': float(np.min(lats)),
-            'north': float(np.max(lats))
+            "west": float(np.min(lons)),
+            "east": float(np.max(lons)),
+            "south": float(np.min(lats)),
+            "north": float(np.max(lats)),
         }
 
     def _download_single_file(self, product: str) -> Dict[str, Any]:
         """Download a single radar file"""
         if product not in self.PRODUCTS:
             return {
-                'error': f"Unknown product: {product}",
-                'product': product,
-                'success': False
+                "error": f"Unknown product: {product}",
+                "product": product,
+                "success": False,
             }
 
         try:
@@ -272,11 +268,11 @@ class ARSORadarSource(RadarSource):
                 # Check if file still exists
                 if os.path.exists(self.temp_files[cache_key]):
                     return {
-                        'product': product,
-                        'path': self.temp_files[cache_key],
-                        'url': url,
-                        'cached': True,
-                        'success': True
+                        "product": product,
+                        "path": self.temp_files[cache_key],
+                        "url": url,
+                        "cached": True,
+                        "success": True,
                     }
 
             # Download to temporary file
@@ -285,9 +281,7 @@ class ARSORadarSource(RadarSource):
 
             # Save to temp file
             with tempfile.NamedTemporaryFile(
-                suffix=f'_arso_{product}.srd',
-                delete=False,
-                mode='wb'
+                suffix=f"_arso_{product}.srd", delete=False, mode="wb"
             ) as temp_file:
                 temp_file.write(response.content)
                 temp_path = Path(temp_file.name)
@@ -296,23 +290,23 @@ class ARSORadarSource(RadarSource):
             self.temp_files[cache_key] = str(temp_path)
 
             return {
-                'product': product,
-                'path': str(temp_path),
-                'url': url,
-                'cached': False,
-                'success': True
+                "product": product,
+                "path": str(temp_path),
+                "url": url,
+                "cached": False,
+                "success": True,
             }
 
         except Exception as e:
-            return {
-                'error': str(e),
-                'product': product,
-                'success': False
-            }
+            return {"error": str(e), "product": product, "success": False}
 
-    def download_latest(self, count: int = 1, products: List[str] = None,
-                       start_time: Optional[datetime] = None,
-                       end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    def download_latest(
+        self,
+        count: int = 1,
+        products: List[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
         """Download latest ARSO radar data
 
         Note: ARSO only provides the latest data at fixed URLs (no archive).
@@ -329,7 +323,7 @@ class ARSORadarSource(RadarSource):
             List of downloaded file information dictionaries
         """
         if products is None:
-            products = ['zm']  # Default to max reflectivity
+            products = ["zm"]  # Default to max reflectivity
 
         print(f"📡 Downloading ARSO radar data ({', '.join(products)})...")
 
@@ -341,28 +335,30 @@ class ARSORadarSource(RadarSource):
 
         for product in products:
             result = self._download_single_file(product)
-            if result['success']:
+            if result["success"]:
                 # Get timestamp from header by reading file
                 try:
-                    with open(result['path'], 'r', encoding='latin-1') as f:
+                    with open(result["path"], "r", encoding="latin-1") as f:
                         content = f.read()
                     header = self._parse_srd_header(content)
-                    time_parts = header.get('time', [])
+                    time_parts = header.get("time", [])
                     if isinstance(time_parts, list) and len(time_parts) >= 5:
                         timestamp = f"{time_parts[0]:04d}{time_parts[1]:02d}{time_parts[2]:02d}{time_parts[3]:02d}{time_parts[4]:02d}00"
                     else:
                         # Fallback to current time
                         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M00")
-                    result['timestamp'] = timestamp
+                    result["timestamp"] = timestamp
                 except Exception as e:
                     print(f"⚠️  Could not parse timestamp: {e}")
-                    result['timestamp'] = datetime.utcnow().strftime("%Y%m%d%H%M00")
+                    result["timestamp"] = datetime.utcnow().strftime("%Y%m%d%H%M00")
 
                 downloaded_files.append(result)
-                if result['cached']:
+                if result["cached"]:
                     print(f"📁 Using cached: {product}")
                 else:
-                    print(f"✅ Downloaded: {product} (timestamp: {result['timestamp']})")
+                    print(
+                        f"✅ Downloaded: {product} (timestamp: {result['timestamp']})"
+                    )
             else:
                 print(f"❌ Failed {product}: {result.get('error', 'Unknown error')}")
 
@@ -374,7 +370,7 @@ class ARSORadarSource(RadarSource):
 
         try:
             # Read file content
-            with open(file_path, 'r', encoding='latin-1') as f:
+            with open(file_path, "r", encoding="latin-1") as f:
                 content = f.read()
 
             # Parse header and data
@@ -385,39 +381,34 @@ class ARSORadarSource(RadarSource):
             self._compute_grid_coordinates()
 
             # Extract timestamp from header
-            time_parts = header.get('time', [])
+            time_parts = header.get("time", [])
             if isinstance(time_parts, list) and len(time_parts) >= 5:
                 timestamp = f"{time_parts[0]:04d}{time_parts[1]:02d}{time_parts[2]:02d}{time_parts[3]:02d}{time_parts[4]:02d}00"
             else:
                 timestamp = datetime.utcnow().strftime("%Y%m%d%H%M00")
 
             # Determine product type from filename or header
-            domain = header.get('domain', 'SI0')
-            unit = header.get('unit', 'DBZ')
-            product = 'ZM' if 'zm' in file_path.lower() else 'RRG'
-            quantity = 'DBZH' if unit == 'DBZ' else 'RATE'
+            domain = header.get("domain", "SI0")
+            unit = header.get("unit", "DBZ")
+            product = "ZM" if "zm" in file_path.lower() else "RRG"
+            quantity = "DBZH" if unit == "DBZ" else "RATE"
 
             return {
-                'data': data,
-                'coordinates': {
-                    'lons': self._lons,
-                    'lats': self._lats
+                "data": data,
+                "coordinates": {"lons": self._lons, "lats": self._lats},
+                "metadata": {
+                    "product": product,
+                    "quantity": quantity,
+                    "timestamp": timestamp,
+                    "source": "ARSO",
+                    "units": self._get_units(unit),
+                    "nodata_value": np.nan,
+                    "domain": domain,
+                    "projection": "LCC (SIRAD)",
                 },
-                'metadata': {
-                    'product': product,
-                    'quantity': quantity,
-                    'timestamp': timestamp,
-                    'source': 'ARSO',
-                    'units': self._get_units(unit),
-                    'nodata_value': np.nan,
-                    'domain': domain,
-                    'projection': 'LCC (SIRAD)'
-                },
-                'extent': {
-                    'wgs84': self._extent_wgs84
-                },
-                'dimensions': data.shape,
-                'timestamp': timestamp[:14]  # YYYYMMDDHHMMSS format
+                "extent": {"wgs84": self._extent_wgs84},
+                "dimensions": data.shape,
+                "timestamp": timestamp[:14],  # YYYYMMDDHHMMSS format
             }
 
         except Exception as e:
@@ -425,11 +416,7 @@ class ARSORadarSource(RadarSource):
 
     def _get_units(self, unit: str) -> str:
         """Get human-readable units"""
-        units_map = {
-            'DBZ': 'dBZ',
-            'DBRH': 'dBR/h',
-            'MM': 'mm'
-        }
+        units_map = {"DBZ": "dBZ", "DBRH": "dBR/h", "MM": "mm"}
         return units_map.get(unit.upper(), unit)
 
     def get_extent(self) -> Dict[str, Any]:
@@ -440,40 +427,24 @@ class ARSORadarSource(RadarSource):
 
         # Convert to Web Mercator
         x_min, y_min = lonlat_to_mercator(
-            self._extent_wgs84['west'],
-            self._extent_wgs84['south']
+            self._extent_wgs84["west"], self._extent_wgs84["south"]
         )
         x_max, y_max = lonlat_to_mercator(
-            self._extent_wgs84['east'],
-            self._extent_wgs84['north']
+            self._extent_wgs84["east"], self._extent_wgs84["north"]
         )
 
         return {
-            'wgs84': self._extent_wgs84,
-            'mercator': {
-                'x_min': x_min,
-                'x_max': x_max,
-                'y_min': y_min,
-                'y_max': y_max,
-                'bounds': [x_min, y_min, x_max, y_max]
+            "wgs84": self._extent_wgs84,
+            "mercator": {
+                "x_min": x_min,
+                "x_max": x_max,
+                "y_min": y_min,
+                "y_max": y_max,
+                "bounds": [x_min, y_min, x_max, y_max],
             },
-            'projection': 'EPSG:3857',
-            'grid_size': [self.GRID_NCELL[1], self.GRID_NCELL[0]],  # [height, width]
-            'resolution_m': [1000, 1000]  # 1 km resolution
+            "projection": "EPSG:3857",
+            "grid_size": [self.GRID_NCELL[1], self.GRID_NCELL[0]],  # [height, width]
+            "resolution_m": [1000, 1000],  # 1 km resolution
         }
 
-    def cleanup_temp_files(self):
-        """Clean up all temporary files created during this session"""
-        cleaned_count = 0
-        for cache_key, file_path in list(self.temp_files.items()):
-            try:
-                if os.path.exists(file_path):
-                    os.unlink(file_path)
-                    cleaned_count += 1
-                del self.temp_files[cache_key]
-            except Exception as e:
-                print(f"⚠️  Could not delete temp file {file_path}: {e}")
-
-        if cleaned_count > 0:
-            print(f"🧹 Cleaned up {cleaned_count} temporary ARSO files")
-        return cleaned_count
+    # cleanup_temp_files() is inherited from RadarSource base class

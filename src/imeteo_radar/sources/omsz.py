@@ -7,15 +7,16 @@ Data source: https://odp.met.hu/weather/radar/composite/
 """
 
 import os
-import zipfile
 import tempfile
-import numpy as np
-import requests
-import netCDF4 as nc
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional
+
+import netCDF4 as nc
+import numpy as np
+import requests
 
 from ..core.base import RadarSource, lonlat_to_mercator
 
@@ -29,32 +30,30 @@ class OMSZRadarSource(RadarSource):
 
         # OMSZ product mapping (user-facing name -> server directory name)
         self.product_mapping = {
-            'cmax': 'refl2D',           # Column Maximum (ZMAX equivalent)
-            'pscappi': 'refl2D_pscappi', # PseudoCAPPI (ground-level)
-            'refl3d': 'refl3D',          # 3D composite
+            "cmax": "refl2D",  # Column Maximum (ZMAX equivalent)
+            "pscappi": "refl2D_pscappi",  # PseudoCAPPI (ground-level)
+            "refl3d": "refl3D",  # 3D composite
         }
 
         # Product metadata
         self.product_info = {
-            'cmax': {
-                'name': 'Column Maximum (CMax)',
-                'units': 'dBZ',
-                'description': 'Column maximum reflectivity (ZMAX equivalent)'
+            "cmax": {
+                "name": "Column Maximum (CMax)",
+                "units": "dBZ",
+                "description": "Column maximum reflectivity (ZMAX equivalent)",
             },
-            'pscappi': {
-                'name': 'PseudoCAPPI',
-                'units': 'dBZ',
-                'description': 'Pseudo-CAPPI ground-level precipitation estimate'
+            "pscappi": {
+                "name": "PseudoCAPPI",
+                "units": "dBZ",
+                "description": "Pseudo-CAPPI ground-level precipitation estimate",
             },
-            'refl3d': {
-                'name': '3D Composite',
-                'units': 'dBZ',
-                'description': '3D radar composite volume'
-            }
+            "refl3d": {
+                "name": "3D Composite",
+                "units": "dBZ",
+                "description": "3D radar composite volume",
+            },
         }
-
-        # Track temporary files for cleanup
-        self.temp_files = {}
+        # temp_files is initialized in base class
 
         # Data scaling parameters (from netCDF: dBZ = raw/2 - 32)
         self.gain = 0.5
@@ -68,9 +67,9 @@ class OMSZRadarSource(RadarSource):
         """Get metadata for a specific OMSZ product"""
         if product in self.product_info:
             return {
-                'product': product,
-                'source': self.name,
-                **self.product_info[product]
+                "product": product,
+                "source": self.name,
+                **self.product_info[product],
             }
         return super().get_product_metadata(product)
 
@@ -78,6 +77,7 @@ class OMSZRadarSource(RadarSource):
         """Generate recent timestamps to search for available data"""
         timestamps = []
         import pytz
+
         current_time = datetime.now(pytz.UTC)
 
         # Start from current time and work backwards in 5-minute intervals
@@ -86,9 +86,7 @@ class OMSZRadarSource(RadarSource):
             check_time = current_time - timedelta(minutes=minutes_back)
             # Round down to nearest 5 minutes
             check_time = check_time.replace(
-                minute=(check_time.minute // 5) * 5,
-                second=0,
-                microsecond=0
+                minute=(check_time.minute // 5) * 5, second=0, microsecond=0
             )
             # OMSZ format: YYYYMMDD_HHMM
             timestamp = check_time.strftime("%Y%m%d_%H%M")
@@ -110,8 +108,9 @@ class OMSZRadarSource(RadarSource):
         except Exception:
             return False
 
-    def _filter_timestamps_by_range(self, timestamps: List[str],
-                                    start_time: datetime, end_time: datetime) -> List[str]:
+    def _filter_timestamps_by_range(
+        self, timestamps: List[str], start_time: datetime, end_time: datetime
+    ) -> List[str]:
         """Filter timestamps to only include those within the specified time range
 
         Args:
@@ -156,8 +155,10 @@ class OMSZRadarSource(RadarSource):
         nc_product = self.product_mapping[product]
 
         # URL format: https://odp.met.hu/weather/radar/composite/nc/{product}/radar_composite-{product}-{YYYYMMDD}_{HHMM}.nc.zip
-        return (f"{self.base_url}/{nc_product}/"
-                f"radar_composite-{nc_product}-{timestamp}.nc.zip")
+        return (
+            f"{self.base_url}/{nc_product}/"
+            f"radar_composite-{nc_product}-{timestamp}.nc.zip"
+        )
 
     def _download_and_extract(self, url: str, timestamp: str, product: str) -> str:
         """Download ZIP and extract netCDF file
@@ -175,21 +176,21 @@ class OMSZRadarSource(RadarSource):
         response.raise_for_status()
 
         # Save to temporary ZIP file
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp_zip:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
             tmp_zip.write(response.content)
             tmp_zip_path = tmp_zip.name
 
         try:
             # Extract netCDF from ZIP
-            with zipfile.ZipFile(tmp_zip_path, 'r') as zf:
-                nc_files = [f for f in zf.namelist() if f.endswith('.nc')]
+            with zipfile.ZipFile(tmp_zip_path, "r") as zf:
+                nc_files = [f for f in zf.namelist() if f.endswith(".nc")]
                 if not nc_files:
                     raise ValueError(f"No netCDF file found in ZIP from {url}")
 
                 nc_filename = nc_files[0]
 
                 # Extract to temp directory
-                temp_dir = tempfile.mkdtemp(prefix='omsz_')
+                temp_dir = tempfile.mkdtemp(prefix="omsz_")
                 zf.extract(nc_filename, temp_dir)
                 nc_path = os.path.join(temp_dir, nc_filename)
 
@@ -203,10 +204,10 @@ class OMSZRadarSource(RadarSource):
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
             return {
-                'error': f"Unknown product: {product}",
-                'timestamp': timestamp,
-                'product': product,
-                'success': False
+                "error": f"Unknown product: {product}",
+                "timestamp": timestamp,
+                "product": product,
+                "success": False,
             }
 
         try:
@@ -214,14 +215,14 @@ class OMSZRadarSource(RadarSource):
             cache_key = f"{timestamp}_{product}"
             if cache_key in self.temp_files:
                 # Normalize timestamp from YYYYMMDD_HHMM to YYYYMMDDHHMM00
-                normalized_timestamp = timestamp.replace('_', '') + '00'
+                normalized_timestamp = timestamp.replace("_", "") + "00"
                 return {
-                    'timestamp': normalized_timestamp,
-                    'product': product,
-                    'path': self.temp_files[cache_key],
-                    'url': self._get_product_url(timestamp, product),
-                    'cached': True,
-                    'success': True
+                    "timestamp": normalized_timestamp,
+                    "product": product,
+                    "path": self.temp_files[cache_key],
+                    "url": self._get_product_url(timestamp, product),
+                    "cached": True,
+                    "success": True,
                 }
 
             # Download and extract
@@ -232,27 +233,31 @@ class OMSZRadarSource(RadarSource):
             self.temp_files[cache_key] = nc_path
 
             # Normalize timestamp from YYYYMMDD_HHMM to YYYYMMDDHHMM00
-            normalized_timestamp = timestamp.replace('_', '') + '00'
+            normalized_timestamp = timestamp.replace("_", "") + "00"
             return {
-                'timestamp': normalized_timestamp,
-                'product': product,
-                'path': nc_path,
-                'url': url,
-                'cached': False,
-                'success': True
+                "timestamp": normalized_timestamp,
+                "product": product,
+                "path": nc_path,
+                "url": url,
+                "cached": False,
+                "success": True,
             }
 
         except Exception as e:
             return {
-                'error': str(e),
-                'timestamp': timestamp,
-                'product': product,
-                'success': False
+                "error": str(e),
+                "timestamp": timestamp,
+                "product": product,
+                "success": False,
             }
 
-    def download_latest(self, count: int, products: Optional[List[str]] = None,
-                       start_time: Optional[datetime] = None,
-                       end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    def download_latest(
+        self,
+        count: int,
+        products: Optional[List[str]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
         """Download latest OMSZ radar data
 
         Args:
@@ -265,7 +270,7 @@ class OMSZRadarSource(RadarSource):
             List of downloaded file information dictionaries
         """
         if products is None:
-            products = ['cmax']  # Default to ZMAX equivalent
+            products = ["cmax"]  # Default to ZMAX equivalent
 
         print(f"[OMSZ] Finding last {count} available timestamps...")
         print(f"[OMSZ] Checking server for current timestamps...")
@@ -279,9 +284,11 @@ class OMSZRadarSource(RadarSource):
             test_timestamps = self._filter_timestamps_by_range(
                 test_timestamps, start_time, end_time
             )
-            print(f"[OMSZ] Filtered timestamps to range: "
-                  f"{start_time.strftime('%Y-%m-%d %H:%M')} to "
-                  f"{end_time.strftime('%Y-%m-%d %H:%M')}")
+            print(
+                f"[OMSZ] Filtered timestamps to range: "
+                f"{start_time.strftime('%Y-%m-%d %H:%M')} to "
+                f"{end_time.strftime('%Y-%m-%d %H:%M')}"
+            )
 
         available_timestamps = []
 
@@ -290,7 +297,7 @@ class OMSZRadarSource(RadarSource):
                 break
 
             # Test with cmax (most reliable product)
-            if self._check_timestamp_availability(timestamp, 'cmax'):
+            if self._check_timestamp_availability(timestamp, "cmax"):
                 available_timestamps.append(timestamp)
                 print(f"[OMSZ] Found: {timestamp}")
 
@@ -298,8 +305,10 @@ class OMSZRadarSource(RadarSource):
             print("[OMSZ] No available timestamps found")
             return []
 
-        print(f"[OMSZ] Downloading {len(available_timestamps)} timestamps "
-              f"x {len(products)} products...")
+        print(
+            f"[OMSZ] Downloading {len(available_timestamps)} timestamps "
+            f"x {len(products)} products..."
+        )
 
         # Create download tasks
         download_tasks = []
@@ -307,15 +316,19 @@ class OMSZRadarSource(RadarSource):
             for product in products:
                 download_tasks.append((timestamp, product))
 
-        print(f"[OMSZ] Starting parallel downloads "
-              f"({len(download_tasks)} files, max 6 concurrent)...")
+        print(
+            f"[OMSZ] Starting parallel downloads "
+            f"({len(download_tasks)} files, max 6 concurrent)..."
+        )
 
         # Execute downloads in parallel
         downloaded_files = []
         with ThreadPoolExecutor(max_workers=6) as executor:
             future_to_task = {
-                executor.submit(self._download_single_file, timestamp, product):
-                    (timestamp, product)
+                executor.submit(self._download_single_file, timestamp, product): (
+                    timestamp,
+                    product,
+                )
                 for timestamp, product in download_tasks
             }
 
@@ -323,15 +336,17 @@ class OMSZRadarSource(RadarSource):
                 timestamp, product = future_to_task[future]
                 try:
                     result = future.result()
-                    if result['success']:
+                    if result["success"]:
                         downloaded_files.append(result)
-                        if result['cached']:
+                        if result["cached"]:
                             print(f"[OMSZ] Using cached: {product} {timestamp}")
                         else:
                             print(f"[OMSZ] Downloaded: {product} {timestamp}")
                     else:
-                        print(f"[OMSZ] Failed {product} {timestamp}: "
-                              f"{result.get('error', 'Unknown error')}")
+                        print(
+                            f"[OMSZ] Failed {product} {timestamp}: "
+                            f"{result.get('error', 'Unknown error')}"
+                        )
                 except Exception as e:
                     print(f"[OMSZ] Exception {product} {timestamp}: {e}")
 
@@ -358,28 +373,29 @@ class OMSZRadarSource(RadarSource):
             Dictionary with processed data, coordinates, and metadata
         """
         try:
-            with nc.Dataset(file_path, 'r') as dataset:
+            with nc.Dataset(file_path, "r") as dataset:
                 # Determine which variable to read based on filename
-                if 'refl2D_pscappi' in file_path:
-                    var_name = 'refl2D_pscappi'
-                elif 'refl3D' in file_path:
-                    var_name = 'refl3D'
+                if "refl2D_pscappi" in file_path:
+                    var_name = "refl2D_pscappi"
+                elif "refl3D" in file_path:
+                    var_name = "refl3D"
                 else:
-                    var_name = 'refl2D'
+                    var_name = "refl2D"
 
                 # Read raw data
                 raw_data = dataset.variables[var_name][:]
 
                 # Get coordinate parameters
-                la1 = float(dataset.variables['La1'][:])  # First latitude (north)
-                lo1 = float(dataset.variables['Lo1'][:])  # First longitude (west)
-                dx = float(dataset.variables['Dx'][:])    # Longitude increment
-                dy = float(dataset.variables['Dy'][:])    # Latitude increment
+                la1 = float(dataset.variables["La1"][:])  # First latitude (north)
+                lo1 = float(dataset.variables["Lo1"][:])  # First longitude (west)
+                dx = float(dataset.variables["Dx"][:])  # Longitude increment
+                dy = float(dataset.variables["Dy"][:])  # Latitude increment
 
                 # Get timestamp
-                gm_time = dataset.variables['GMTime'][:]
-                timestamp_str = ''.join([c.decode('utf-8') if isinstance(c, bytes)
-                                        else c for c in gm_time])
+                gm_time = dataset.variables["GMTime"][:]
+                timestamp_str = "".join(
+                    [c.decode("utf-8") if isinstance(c, bytes) else c for c in gm_time]
+                )
 
                 # IMPORTANT: Data is stored as int8 but should be interpreted as uint8
                 # Values >= 128 wrap around to negative in int8 representation
@@ -396,7 +412,7 @@ class OMSZRadarSource(RadarSource):
                 #   This is the grey coverage mask that should be transparent
                 # - Actual radar data starts at raw value 1 (0.5 dBZ)
                 scaled_data[raw_data == 255] = np.nan  # Outside coverage
-                scaled_data[raw_data == 0] = np.nan    # Grey coverage mask (background)
+                scaled_data[raw_data == 0] = np.nan  # Grey coverage mask (background)
 
                 # Get dimensions
                 n_lat, n_lon = raw_data.shape
@@ -412,31 +428,28 @@ class OMSZRadarSource(RadarSource):
                 lats = np.linspace(north, south, n_lat)  # North to south
 
                 return {
-                    'data': scaled_data,
-                    'coordinates': {
-                        'lons': lons,
-                        'lats': lats
+                    "data": scaled_data,
+                    "coordinates": {"lons": lons, "lats": lats},
+                    "metadata": {
+                        "product": var_name,
+                        "quantity": "DBZH",
+                        "timestamp": timestamp_str,
+                        "source": "OMSZ",
+                        "units": "dBZ",
+                        "nodata_value": np.nan,
+                        "gain": self.gain,
+                        "offset": self.offset,
                     },
-                    'metadata': {
-                        'product': var_name,
-                        'quantity': 'DBZH',
-                        'timestamp': timestamp_str,
-                        'source': 'OMSZ',
-                        'units': 'dBZ',
-                        'nodata_value': np.nan,
-                        'gain': self.gain,
-                        'offset': self.offset
-                    },
-                    'extent': {
-                        'wgs84': {
-                            'west': west,
-                            'east': east,
-                            'south': south,
-                            'north': north
+                    "extent": {
+                        "wgs84": {
+                            "west": west,
+                            "east": east,
+                            "south": south,
+                            "north": north,
                         }
                     },
-                    'dimensions': raw_data.shape,
-                    'timestamp': timestamp_str  # YYYYMMDDHHMM format
+                    "dimensions": raw_data.shape,
+                    "timestamp": timestamp_str,  # YYYYMMDDHHMM format
                 }
 
         except Exception as e:
@@ -452,41 +465,42 @@ class OMSZRadarSource(RadarSource):
         - Calculated extent: N=50.5, S=44.0, W=13.5, E=25.5
         """
         # OMSZ radar coverage (from actual data)
-        wgs84 = {
-            'west': 13.5,
-            'east': 25.5,
-            'south': 44.0,
-            'north': 50.5
-        }
+        wgs84 = {"west": 13.5, "east": 25.5, "south": 44.0, "north": 50.5}
 
         # Convert to Web Mercator
-        x_min, y_min = lonlat_to_mercator(wgs84['west'], wgs84['south'])
-        x_max, y_max = lonlat_to_mercator(wgs84['east'], wgs84['north'])
+        x_min, y_min = lonlat_to_mercator(wgs84["west"], wgs84["south"])
+        x_max, y_max = lonlat_to_mercator(wgs84["east"], wgs84["north"])
 
         return {
-            'wgs84': wgs84,
-            'mercator': {
-                'x_min': x_min,
-                'x_max': x_max,
-                'y_min': y_min,
-                'y_max': y_max,
-                'bounds': [x_min, y_min, x_max, y_max]
+            "wgs84": wgs84,
+            "mercator": {
+                "x_min": x_min,
+                "x_max": x_max,
+                "y_min": y_min,
+                "y_max": y_max,
+                "bounds": [x_min, y_min, x_max, y_max],
             },
-            'projection': 'EPSG:3857',
-            'grid_size': [813, 961],  # [height, width]
-            'resolution_m': [890, 930]  # Approximate [y_res, x_res] in meters
+            "projection": "EPSG:3857",
+            "grid_size": [813, 961],  # [height, width]
+            "resolution_m": [890, 930],  # Approximate [y_res, x_res] in meters
         }
 
-    def cleanup_temp_files(self):
-        """Clean up all temporary files created during this session"""
+    def cleanup_temp_files(self) -> int:
+        """Clean up temporary files and parent temp directories.
+
+        Overrides base class to also clean up OMSZ-specific temp directories.
+        """
         cleaned_count = 0
         for cache_key, file_path in list(self.temp_files.items()):
             try:
                 if os.path.exists(file_path):
-                    # Also clean up parent temp directory
+                    # Also clean up parent temp directory (OMSZ-specific)
                     parent_dir = os.path.dirname(file_path)
                     os.unlink(file_path)
-                    if parent_dir.startswith(tempfile.gettempdir()) and 'omsz_' in parent_dir:
+                    if (
+                        parent_dir.startswith(tempfile.gettempdir())
+                        and "omsz_" in parent_dir
+                    ):
                         try:
                             os.rmdir(parent_dir)
                         except OSError:
@@ -494,8 +508,8 @@ class OMSZRadarSource(RadarSource):
                     cleaned_count += 1
                 del self.temp_files[cache_key]
             except Exception as e:
-                print(f"[OMSZ] Could not delete temp file {file_path}: {e}")
+                print(f"⚠️  Could not delete temp file {file_path}: {e}")
 
         if cleaned_count > 0:
-            print(f"[OMSZ] Cleaned up {cleaned_count} temporary files")
+            print(f"🧹 Cleaned up {cleaned_count} temporary OMSZ files")
         return cleaned_count
