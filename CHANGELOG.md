@@ -5,6 +5,26 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-01-14
+
+### Added
+- Timestamp tolerance matching for composite generation
+  - New `--timestamp-tolerance` argument (default: 2 minutes)
+  - Finds data within time window instead of requiring exact timestamp matches
+  - Better handling of sources with different update intervals
+- ARSO fallback logic for composite command
+  - New `--require-arso` flag to control fallback behavior
+  - Auto-excludes ARSO when no timestamp match (ARSO only provides latest)
+  - ARSO excluded from backload mode (no historical data available)
+- Individual export paths for new sources
+  - `/tmp/slovenia/` for ARSO radar images
+  - `/tmp/hungary/` for OMSZ radar images
+- OMSZ and ARSO added to default composite sources
+
+### Fixed
+- OMSZ timestamp format normalization (`YYYYMMDD_HHMM` → `YYYYMMDDHHMM00`)
+- OMSZ nodata handling: raw value 0 (grey coverage mask) now transparent
+
 ## [1.4.0] - 2026-01-09
 
 ### Added
