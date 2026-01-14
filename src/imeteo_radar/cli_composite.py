@@ -69,6 +69,68 @@ def composite_command_impl(args: Any) -> int:
         return 1
 
 
+def _find_common_timestamp_with_tolerance(
+    timestamp_groups, sources, tolerance_minutes=2
+):
+    """Find most recent timestamp where all sources have data within tolerance window
+
+    Args:
+        timestamp_groups: Dict mapping timestamp str -> Dict[source_name, file_info]
+        sources: Dict of source configurations
+        tolerance_minutes: Maximum time difference allowed (default: 2 minutes)
+
+    Returns:
+        (common_timestamp, source_files) or (None, None)
+    """
+    from datetime import datetime, timedelta
+
+    # Parse all timestamps to datetime
+    timestamp_datetimes = {}
+    for ts_str in timestamp_groups.keys():
+        try:
+            dt = datetime.strptime(ts_str[:12], "%Y%m%d%H%M")
+            timestamp_datetimes[ts_str] = dt
+        except ValueError:
+            continue
+
+    # Sort by datetime (most recent first)
+    sorted_timestamps = sorted(
+        timestamp_datetimes.keys(),
+        key=lambda x: timestamp_datetimes[x],
+        reverse=True
+    )
+
+    tolerance = timedelta(minutes=tolerance_minutes)
+
+    # For each timestamp, check if all sources have data within tolerance
+    for candidate_ts in sorted_timestamps:
+        candidate_dt = timestamp_datetimes[candidate_ts]
+        sources_in_window = {}
+
+        # Find sources with data in this time window
+        for ts_str, ts_dt in timestamp_datetimes.items():
+            if abs(ts_dt - candidate_dt) <= tolerance:
+                for source_name, file_info in timestamp_groups[ts_str].items():
+                    if source_name not in sources_in_window:
+                        sources_in_window[source_name] = (ts_str, file_info, ts_dt)
+                    else:
+                        # Keep the closer timestamp
+                        existing_ts, existing_info, existing_dt = sources_in_window[source_name]
+                        if abs(ts_dt - candidate_dt) < abs(existing_dt - candidate_dt):
+                            sources_in_window[source_name] = (ts_str, file_info, ts_dt)
+
+        # Check if all sources present
+        if len(sources_in_window) == len(sources):
+            print(f"✅ Found common time window around {candidate_ts}")
+            for src, (ts, _, dt) in sources_in_window.items():
+                offset = (dt - candidate_dt).total_seconds() / 60
+                print(f"   {src.upper()}: {ts} (offset: {offset:+.1f} min)")
+
+            return candidate_ts, {src: info for src, (_, info, _) in sources_in_window.items()}
+
+    return None, None
+
+
 def _process_latest(args, sources, exporter, output_dir):
     """Process latest available data from all sources
 
@@ -108,19 +170,54 @@ def _process_latest(args, sources, exporter, output_dir):
                 timestamp_groups[timestamp] = {}
             timestamp_groups[timestamp][source_name] = file_info
 
-    # Find most recent timestamp with all sources
-    common_timestamp = None
-    for timestamp in sorted(timestamp_groups.keys(), reverse=True):  # Most recent first
-        source_files = timestamp_groups[timestamp]
-        if len(source_files) == len(sources):  # All sources have this timestamp
-            common_timestamp = timestamp
-            print(f"✅ Found common timestamp: {timestamp}")
-            break
+    # Find most recent timestamp with all sources (with time-window tolerance)
+    tolerance = getattr(args, 'timestamp_tolerance', 2)
+    common_timestamp, source_files = _find_common_timestamp_with_tolerance(
+        timestamp_groups, sources, tolerance
+    )
 
     if not common_timestamp:
-        print(f"❌ No common timestamp found across all sources")
-        print(f"   Each source has different timestamps - try again in a few minutes")
-        return 1
+        # If ARSO is included and no match found, try again without ARSO
+        # ARSO only provides latest data, so timing mismatches are common
+        require_arso = getattr(args, 'require_arso', False)
+        if 'arso' in sources and len(sources) > 2 and not require_arso:
+            print(f"⚠️  No common timestamp with ARSO, retrying without ARSO...")
+            print(f"   (ARSO only provides single latest timestamp)")
+
+            # Remove ARSO from sources and timestamp groups
+            del sources['arso']
+            if 'arso' in all_source_files:
+                del all_source_files['arso']
+
+            # Rebuild timestamp groups without ARSO
+            timestamp_groups = {}
+            for source_name, files in all_source_files.items():
+                for file_info in files:
+                    timestamp = file_info['timestamp']
+                    if timestamp not in timestamp_groups:
+                        timestamp_groups[timestamp] = {}
+                    timestamp_groups[timestamp][source_name] = file_info
+
+            # Try matching again
+            common_timestamp, source_files = _find_common_timestamp_with_tolerance(
+                timestamp_groups, sources, tolerance
+            )
+
+            if not common_timestamp:
+                print(f"❌ No common timestamp found even without ARSO")
+                print(f"   Timestamp tolerance: {tolerance} minutes")
+                print(f"\n💡 Try again in a few minutes or increase --timestamp-tolerance")
+                return 1
+        else:
+            print(f"❌ No common timestamp found across all sources")
+            print(f"   Timestamp tolerance: {tolerance} minutes")
+            print(f"\nAvailable timestamps by source:")
+            for source_name in sources.keys():
+                if source_name in all_source_files and all_source_files[source_name]:
+                    timestamps = [f['timestamp'] for f in all_source_files[source_name][:3]]
+                    print(f"   {source_name.upper()}: {', '.join(timestamps)}")
+            print(f"\n💡 Try again in a few minutes or increase --timestamp-tolerance")
+            return 1
 
     # Step 3: Process data for the common timestamp
     print(f"\n📡 Processing data for timestamp: {common_timestamp}...")
@@ -130,8 +227,13 @@ def _process_latest(args, sources, exporter, output_dir):
     dt_utc = pytz.UTC.localize(dt)
     unix_timestamp = int(dt_utc.timestamp())
 
+    # Process data from matched sources
+    if not source_files:
+        print(f"❌ No source files matched (internal error)")
+        return 1
+
     sources_data = []
-    for source_name, file_info in timestamp_groups[common_timestamp].items():
+    for source_name, file_info in source_files.items():
         source, product = sources[source_name]
         try:
             radar_data = source.process_to_array(file_info['path'])
@@ -192,6 +294,8 @@ def _export_individual_sources(sources_data, exporter, unix_timestamp, timestamp
     - DWD -> /tmp/germany/
     - SHMU -> /tmp/slovakia/
     - CHMI -> /tmp/czechia/
+    - ARSO -> /tmp/slovenia/
+    - OMSZ -> /tmp/hungary/
 
     Args:
         sources_data: List of (source_name, radar_data) tuples
@@ -207,6 +311,8 @@ def _export_individual_sources(sources_data, exporter, unix_timestamp, timestamp
         'dwd': Path('/tmp/germany/'),
         'shmu': Path('/tmp/slovakia/'),
         'chmi': Path('/tmp/czechia/'),
+        'arso': Path('/tmp/slovenia'),
+        'omsz': Path('/tmp/hungary/')
     }
 
     for source_name, radar_data in sources_data:
@@ -274,9 +380,16 @@ def _process_backload(args, sources, exporter, output_dir):
     intervals = int(time_diff.total_seconds() / 300) + 1  # 300 seconds = 5 minutes
     print(f"   Expected intervals: {intervals}")
 
+    # Remove ARSO from sources for backload mode (no historical data available)
+    if 'arso' in sources:
+        print(f"\n⚠️  Excluding ARSO from backload mode (no historical data available)")
+        print(f"   ARSO only provides latest data")
+        del sources['arso']
+
     # Download data from all sources for the time range
     all_source_files = {}
     for source_name, (source, product) in sources.items():
+
         print(f"\n🌐 Downloading {source_name.upper()} data...")
         files = source.download_latest(
             count=intervals,

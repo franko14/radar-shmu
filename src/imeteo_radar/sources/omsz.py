@@ -213,8 +213,10 @@ class OMSZRadarSource(RadarSource):
             # Check if we've already downloaded this file in this session
             cache_key = f"{timestamp}_{product}"
             if cache_key in self.temp_files:
+                # Normalize timestamp from YYYYMMDD_HHMM to YYYYMMDDHHMM00
+                normalized_timestamp = timestamp.replace('_', '') + '00'
                 return {
-                    'timestamp': timestamp,
+                    'timestamp': normalized_timestamp,
                     'product': product,
                     'path': self.temp_files[cache_key],
                     'url': self._get_product_url(timestamp, product),
@@ -229,8 +231,10 @@ class OMSZRadarSource(RadarSource):
             # Track the temporary file
             self.temp_files[cache_key] = nc_path
 
+            # Normalize timestamp from YYYYMMDD_HHMM to YYYYMMDDHHMM00
+            normalized_timestamp = timestamp.replace('_', '') + '00'
             return {
-                'timestamp': timestamp,
+                'timestamp': normalized_timestamp,
                 'product': product,
                 'path': nc_path,
                 'url': url,
@@ -386,10 +390,13 @@ class OMSZRadarSource(RadarSource):
                 # Apply scaling: dBZ = raw / 2 - 32
                 scaled_data = raw_data.astype(np.float32) * self.gain + self.offset
 
-                # Handle nodata:
-                # - 255 (uint8) is nodata/outside coverage (appears on edges)
-                # - 0 represents -32 dBZ (no echo/background) - keep as valid data
-                scaled_data[raw_data == 255] = np.nan
+                # Handle nodata (based on data analysis):
+                # - 255 (uint8): nodata/outside coverage (37.5% of pixels)
+                # - 0 (uint8): static background/coverage mask (62.3% of pixels) → -32 dBZ
+                #   This is the grey coverage mask that should be transparent
+                # - Actual radar data starts at raw value 1 (0.5 dBZ)
+                scaled_data[raw_data == 255] = np.nan  # Outside coverage
+                scaled_data[raw_data == 0] = np.nan    # Grey coverage mask (background)
 
                 # Get dimensions
                 n_lat, n_lon = raw_data.shape
