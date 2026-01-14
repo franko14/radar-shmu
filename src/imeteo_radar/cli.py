@@ -96,8 +96,8 @@ def create_parser() -> argparse.ArgumentParser:
     composite_parser.add_argument(
         '--sources',
         type=str,
-        default='dwd,shmu,chmi',
-        help='Comma-separated list of sources to merge (default: dwd,shmu,chmi)'
+        default='dwd,shmu,chmi,omsz,arso',
+        help='Comma-separated list of sources to merge (default: dwd,shmu,chmi,omsz,arso)'
     )
     composite_parser.add_argument(
         '--output',
@@ -142,6 +142,17 @@ def create_parser() -> argparse.ArgumentParser:
         '--no-individual',
         action='store_true',
         help='Skip generating individual source images (only create composite)'
+    )
+    composite_parser.add_argument(
+        '--timestamp-tolerance',
+        type=int,
+        default=2,
+        help='Timestamp matching tolerance in minutes (default: 2)'
+    )
+    composite_parser.add_argument(
+        '--require-arso',
+        action='store_true',
+        help='Fail if ARSO data cannot be matched (default: fallback to composite without ARSO)'
     )
 
     return parser
