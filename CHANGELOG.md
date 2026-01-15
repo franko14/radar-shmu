@@ -5,6 +5,19 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-01-15
+
+### Added
+- **Coverage mask generation** (`coverage-mask` CLI command)
+  - Generate static coverage masks for each radar source
+  - Generate composite coverage mask combining all sources
+  - Masks match exact dimensions of radar PNG output
+  - Transparent = covered area, Gray = outside radar range
+- New `src/imeteo_radar/processing/coverage_mask.py` module
+  - Supports all radar sources: DWD, SHMU, CHMI, ARSO, OMSZ
+  - Automatic dimension detection from existing radar PNG files
+  - Web Mercator reprojection for composite mask generation
+
 ## [2.0.0] - 2026-01-14
 
 ### Changed
