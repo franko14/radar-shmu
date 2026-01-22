@@ -11,9 +11,9 @@ Documentation: https://meteo.arso.gov.si/uploads/meteo/help/sl/SRD3Format.html
 
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import requests
@@ -74,11 +74,11 @@ class ARSORadarSource(RadarSource):
         self._lats = None
         self._extent_wgs84 = None
 
-    def get_available_products(self) -> List[str]:
+    def get_available_products(self) -> list[str]:
         """Get list of available ARSO radar products"""
         return list(self.PRODUCTS.keys())
 
-    def get_product_metadata(self, product: str) -> Dict[str, Any]:
+    def get_product_metadata(self, product: str) -> dict[str, Any]:
         """Get metadata for a specific ARSO product"""
         if product in self.PRODUCTS:
             return {"product": product, "source": self.name, **self.PRODUCTS[product]}
@@ -92,7 +92,7 @@ class ARSORadarSource(RadarSource):
         filename = self.PRODUCTS[product]["file"]
         return f"{self.BASE_URL}/{filename}"
 
-    def _parse_srd_header(self, content: str) -> Dict[str, Any]:
+    def _parse_srd_header(self, content: str) -> dict[str, Any]:
         """Parse SRD-3 format header
 
         Header format: "key value1 value2 ... # optional comment"
@@ -142,7 +142,7 @@ class ARSORadarSource(RadarSource):
 
         return header
 
-    def _parse_srd_data(self, content: str, header: Dict[str, Any]) -> np.ndarray:
+    def _parse_srd_data(self, content: str, header: dict[str, Any]) -> np.ndarray:
         """Parse SRD-3 data section
 
         Data is byte-encoded as ASCII characters starting from offset (default 64='@').
@@ -250,7 +250,7 @@ class ARSORadarSource(RadarSource):
             "north": float(np.max(lats)),
         }
 
-    def _download_single_file(self, product: str) -> Dict[str, Any]:
+    def _download_single_file(self, product: str) -> dict[str, Any]:
         """Download a single radar file"""
         if product not in self.PRODUCTS:
             return {
@@ -303,10 +303,10 @@ class ARSORadarSource(RadarSource):
     def download_latest(
         self,
         count: int = 1,
-        products: List[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-    ) -> List[Dict[str, Any]]:
+        products: list[str] = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """Download latest ARSO radar data
 
         Note: ARSO only provides the latest data at fixed URLs (no archive).
@@ -338,7 +338,7 @@ class ARSORadarSource(RadarSource):
             if result["success"]:
                 # Get timestamp from header by reading file
                 try:
-                    with open(result["path"], "r", encoding="latin-1") as f:
+                    with open(result["path"], encoding="latin-1") as f:
                         content = f.read()
                     header = self._parse_srd_header(content)
                     time_parts = header.get("time", [])
@@ -365,12 +365,12 @@ class ARSORadarSource(RadarSource):
         print(f"📋 ARSO: Downloaded {len(downloaded_files)} files")
         return downloaded_files
 
-    def process_to_array(self, file_path: str) -> Dict[str, Any]:
+    def process_to_array(self, file_path: str) -> dict[str, Any]:
         """Process ARSO SRD file to array with metadata"""
 
         try:
             # Read file content
-            with open(file_path, "r", encoding="latin-1") as f:
+            with open(file_path, encoding="latin-1") as f:
                 content = f.read()
 
             # Parse header and data
@@ -419,7 +419,7 @@ class ARSORadarSource(RadarSource):
         units_map = {"DBZ": "dBZ", "DBRH": "dBR/h", "MM": "mm"}
         return units_map.get(unit.upper(), unit)
 
-    def get_extent(self) -> Dict[str, Any]:
+    def get_extent(self) -> dict[str, Any]:
         """Get ARSO radar coverage extent"""
 
         # Ensure coordinates are computed
@@ -446,5 +446,43 @@ class ARSORadarSource(RadarSource):
             "grid_size": [self.GRID_NCELL[1], self.GRID_NCELL[0]],  # [height, width]
             "resolution_m": [1000, 1000],  # 1 km resolution
         }
+
+    def extract_extent_only(self, file_path: str) -> dict[str, Any]:
+        """Extract extent from ARSO SRD file without loading full data.
+
+        MEMORY OPTIMIZATION: ARSO extent is pre-computed from grid parameters.
+        Only reads header to verify grid dimensions.
+
+        Args:
+            file_path: Path to ARSO SRD file
+
+        Returns:
+            Dictionary with extent and dimensions
+        """
+        # Ensure coordinates are computed (uses cached extent)
+        self._compute_grid_coordinates()
+
+        # Read header to get dimensions
+        try:
+            with open(file_path, encoding="latin-1") as f:
+                content = f.read(2000)  # Read only first 2KB for header
+
+            header = self._parse_srd_header(content)
+            ncell = header.get("ncell", self.GRID_NCELL)
+            if isinstance(ncell, list):
+                width, height = ncell[0], ncell[1]
+            else:
+                width, height = self.GRID_NCELL
+
+            return {
+                "extent": {"wgs84": self._extent_wgs84},
+                "dimensions": (height, width),
+            }
+        except Exception:
+            # Fallback to pre-computed values
+            return {
+                "extent": {"wgs84": self._extent_wgs84},
+                "dimensions": (self.GRID_NCELL[1], self.GRID_NCELL[0]),
+            }
 
     # cleanup_temp_files() is inherited from RadarSource base class

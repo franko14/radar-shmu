@@ -6,14 +6,14 @@ This module provides a single source of truth for source configurations,
 eliminating duplication across cli.py, cli_composite.py, and spaces_uploader.py.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..core.base import RadarSource
 
 
 # Central registry of all radar sources
-SOURCE_REGISTRY: Dict[str, Dict[str, Any]] = {
+SOURCE_REGISTRY: dict[str, dict[str, Any]] = {
     "dwd": {
         "class_name": "DWDRadarSource",
         "module": "imeteo_radar.sources.dwd",
@@ -57,7 +57,7 @@ SOURCE_REGISTRY: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_source_config(source_name: str) -> Optional[Dict[str, Any]]:
+def get_source_config(source_name: str) -> dict[str, Any] | None:
     """Get configuration for a source by name.
 
     Args:

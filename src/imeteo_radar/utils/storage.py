@@ -8,22 +8,20 @@ Storage structure: {base_path}/{source}/{YYYY}/{MM}/{DD}/{HH}/files
 
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-
-import h5py
+from typing import Any
 
 
 class TimePartitionedStorage:
     """Time-based partitioned storage for radar data"""
 
-    def __init__(self, base_path: Union[str, Path] = "storage"):
+    def __init__(self, base_path: str | Path = "storage"):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
 
         # Metadata cache for fast lookups
-        self.metadata_cache: Dict[str, Any] = {}
+        self.metadata_cache: dict[str, Any] = {}
 
     def get_partition_path(self, timestamp: str, source: str) -> Path:
         """
@@ -49,11 +47,11 @@ class TimePartitionedStorage:
 
     def store_file(
         self,
-        file_path: Union[str, Path],
+        file_path: str | Path,
         timestamp: str,
         source: str,
         product: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Path:
         """
         Store a file in time-partitioned storage
@@ -90,10 +88,10 @@ class TimePartitionedStorage:
     def get_files(
         self,
         source: str,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-        product: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        start_time: str | None = None,
+        end_time: str | None = None,
+        product: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Get files from time-partitioned storage with optional filtering
 
@@ -146,7 +144,7 @@ class TimePartitionedStorage:
 
         return sorted(files, key=lambda x: x["timestamp"])
 
-    def _parse_file_info(self, file_path: Path) -> Dict[str, Any]:
+    def _parse_file_info(self, file_path: Path) -> dict[str, Any]:
         """Parse file information from path and metadata"""
         filename = file_path.stem
         parts = filename.split("_")
@@ -156,7 +154,7 @@ class TimePartitionedStorage:
             "filename": file_path.name,
             "size": file_path.stat().st_size,
             "modified": datetime.fromtimestamp(
-                file_path.stat().st_mtime, tz=timezone.utc
+                file_path.stat().st_mtime, tz=UTC
             ).isoformat(),
         }
 
@@ -175,16 +173,16 @@ class TimePartitionedStorage:
         metadata_path = file_path.with_suffix(".json")
         if metadata_path.exists():
             try:
-                with open(metadata_path, "r") as f:
+                with open(metadata_path) as f:
                     file_info["metadata"] = json.load(f)
-            except:
+            except Exception:
                 pass
 
         return file_info
 
     def get_latest_files(
-        self, source: str, count: int = 10, product: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, source: str, count: int = 10, product: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Get latest files from storage
 
@@ -212,7 +210,7 @@ class TimePartitionedStorage:
         """
         from datetime import timedelta
 
-        cutoff_time = datetime.now(timezone.utc) - timedelta(days=keep_days)
+        cutoff_time = datetime.now(UTC) - timedelta(days=keep_days)
         cutoff_timestamp = cutoff_time.strftime("%Y%m%d%H%M%S")
 
         files = self.get_files(source, end_time=cutoff_timestamp)
@@ -228,7 +226,7 @@ class TimePartitionedStorage:
                 deleted_count += 1
                 if metadata_path.exists():
                     metadata_path.unlink()
-            except:
+            except Exception:
                 pass
 
         # Clean up empty directories
@@ -250,10 +248,10 @@ class TimePartitionedStorage:
         try:
             if path.exists() and not any(path.iterdir()):
                 path.rmdir()
-        except:
+        except Exception:
             pass
 
-    def get_storage_stats(self) -> Dict[str, Any]:
+    def get_storage_stats(self) -> dict[str, Any]:
         """Get storage statistics"""
         stats = {"total_size": 0, "total_files": 0, "sources": {}}
 
@@ -301,7 +299,7 @@ class TimePartitionedStorage:
 
         return stats
 
-    def migrate_existing_data(self, old_cache_dir: Union[str, Path], source: str):
+    def migrate_existing_data(self, old_cache_dir: str | Path, source: str):
         """
         Migrate existing data from old cache directory to time-partitioned storage
 
@@ -337,7 +335,7 @@ class TimePartitionedStorage:
 
         print(f"📦 Migrated {migrated_count} files from {old_cache_dir}")
 
-    def _extract_timestamp_from_filename(self, filename: str) -> Optional[str]:
+    def _extract_timestamp_from_filename(self, filename: str) -> str | None:
         """Extract timestamp from filename"""
         # Common patterns: T_PABV22_C_LZIB_20250909081000.hdf
         import re
@@ -360,7 +358,7 @@ class TimePartitionedStorage:
 
         return None
 
-    def _extract_product_from_filename(self, filename: str) -> Optional[str]:
+    def _extract_product_from_filename(self, filename: str) -> str | None:
         """Extract product type from filename"""
         # Map filename patterns to product types
         product_patterns = {

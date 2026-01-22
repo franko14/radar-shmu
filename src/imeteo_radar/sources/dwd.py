@@ -10,7 +10,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import h5py
 import numpy as np
@@ -60,11 +60,11 @@ class DWDRadarSource(RadarSource):
         }
         # temp_files is initialized in base class
 
-    def get_available_products(self) -> List[str]:
+    def get_available_products(self) -> list[str]:
         """Get list of available DWD radar products"""
         return list(self.product_mapping.keys())
 
-    def get_product_metadata(self, product: str) -> Dict[str, Any]:
+    def get_product_metadata(self, product: str) -> dict[str, Any]:
         """Get metadata for a specific DWD product"""
         if product in self.product_info:
             return {
@@ -74,7 +74,7 @@ class DWDRadarSource(RadarSource):
             }
         return super().get_product_metadata(product)
 
-    def _get_available_timestamps_from_server(self, product: str) -> List[str]:
+    def _get_available_timestamps_from_server(self, product: str) -> list[str]:
         """Get actually available timestamps by parsing DWD directory listing"""
 
         directory_url = f"{self.base_url}/{product}/"
@@ -97,7 +97,7 @@ class DWDRadarSource(RadarSource):
                 )
                 return timestamps
             else:
-                print(f"❌ No timestamp patterns found in directory listing")
+                print("❌ No timestamp patterns found in directory listing")
                 return []
 
         except Exception as e:
@@ -105,8 +105,8 @@ class DWDRadarSource(RadarSource):
             return []
 
     def _filter_timestamps_by_range(
-        self, timestamps: List[str], start_time: datetime, end_time: datetime
-    ) -> List[str]:
+        self, timestamps: list[str], start_time: datetime, end_time: datetime
+    ) -> list[str]:
         """Filter timestamps to only include those within the specified time range
 
         Args:
@@ -136,7 +136,7 @@ class DWDRadarSource(RadarSource):
 
         return filtered
 
-    def _generate_timestamps(self, count: int) -> List[str]:
+    def _generate_timestamps(self, count: int) -> list[str]:
         """Generate recent timestamps with timezone-aware approach"""
         timestamps = []
         import pytz
@@ -175,7 +175,7 @@ class DWDRadarSource(RadarSource):
             response = requests.head(url, timeout=10)
             if response.status_code == 200:
                 return True
-        except:
+        except Exception:
             pass
 
         # Fallback to GET request with range header to minimize data transfer
@@ -183,7 +183,7 @@ class DWDRadarSource(RadarSource):
             headers = {"Range": "bytes=0-1024"}  # Just get first 1KB
             response = requests.get(url, headers=headers, timeout=10)
             return response.status_code in [200, 206]  # 206 = Partial Content
-        except:
+        except Exception:
             return False
 
     def _get_product_url(self, timestamp: str, product: str) -> str:
@@ -198,7 +198,7 @@ class DWDRadarSource(RadarSource):
         # DWD URL format: composite_{product}_{YYYYMMDD_HHMM}-hd5
         return f"{self.base_url}/{product}/composite_{product}_{timestamp}-hd5"
 
-    def _download_single_file(self, timestamp: str, product: str) -> Dict[str, Any]:
+    def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single DWD radar file (for parallel processing)"""
         if product not in self.product_mapping:
             return {
@@ -292,11 +292,11 @@ class DWDRadarSource(RadarSource):
     def download_latest(
         self,
         count: int = 1,
-        products: List[str] = None,
+        products: list[str] = None,
         use_latest: bool = True,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-    ) -> List[Dict[str, Any]]:
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """Download latest DWD radar data
 
         Args:
@@ -312,7 +312,7 @@ class DWDRadarSource(RadarSource):
 
         # If only fetching one file and use_latest is True, use LATEST endpoint
         if count == 1 and use_latest and not start_time and not end_time:
-            print(f"📡 Using LATEST endpoint for most recent data...")
+            print("📡 Using LATEST endpoint for most recent data...")
             downloaded_files = []
             for product in products:
                 result = self._download_single_file("LATEST", product)
@@ -343,7 +343,7 @@ class DWDRadarSource(RadarSource):
                     )
                 else:
                     available_timestamps = server_timestamps[:count]
-                    print(f"✅ Using server directory listing")
+                    print("✅ Using server directory listing")
                 break  # Use first working product for timestamp discovery
 
         # Strategy 2: Fallback to generated timestamps if directory parsing fails
@@ -413,11 +413,11 @@ class DWDRadarSource(RadarSource):
                     print(f"❌ Exception {product} {timestamp}: {e}")
 
         print(
-            f"📋 DWD: Downloaded {len(downloaded_files)} files ({len(download_tasks)-len(downloaded_files)} failed)"
+            f"📋 DWD: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)"
         )
         return downloaded_files
 
-    def process_to_array(self, file_path: str) -> Dict[str, Any]:
+    def process_to_array(self, file_path: str) -> dict[str, Any]:
         """Process DWD HDF5 file to array with metadata"""
 
         try:
@@ -502,7 +502,7 @@ class DWDRadarSource(RadarSource):
                         proj_def = proj_def.decode("utf-8")
 
                     print(f"🗺️ DWD projection: {proj_def}")
-                except:
+                except Exception:
                     print(
                         "⚠️ No projection definition found - using corner approximation"
                     )
@@ -555,7 +555,7 @@ class DWDRadarSource(RadarSource):
         except Exception as e:
             raise RuntimeError(f"Failed to process DWD file {file_path}: {e}")
 
-    def _extract_dwd_metadata(self, hdf_file, file_path: str) -> Dict[str, Any]:
+    def _extract_dwd_metadata(self, hdf_file, file_path: str) -> dict[str, Any]:
         """Extract metadata from DWD HDF5 file"""
         metadata = {}
 
@@ -568,7 +568,7 @@ class DWDRadarSource(RadarSource):
                         metadata[key] = value.decode("utf-8")
                     else:
                         metadata[key] = value
-        except:
+        except Exception:
             pass
 
         # Extract product from filename
@@ -599,7 +599,7 @@ class DWDRadarSource(RadarSource):
             return f"{date_part}{time_part}00"  # Normalize to 14-digit: YYYYMMDDHHMM00
         return "unknown"
 
-    def get_extent(self) -> Dict[str, Any]:
+    def get_extent(self) -> dict[str, Any]:
         """Get DWD radar coverage extent"""
 
         # DWD radar coverage (actual data bounds - larger than Germany proper)
@@ -644,5 +644,44 @@ class DWDRadarSource(RadarSource):
                     )
         except Exception as e:
             print(f"  Error printing structure: {e}")
+
+    def extract_extent_only(self, file_path: str) -> dict[str, Any]:
+        """Extract extent from DWD HDF5 without loading data array.
+
+        MEMORY OPTIMIZATION: Reads only HDF5 metadata (~100 bytes) instead of
+        loading the full data array (~160 MB for DWD 1900x1900 grid).
+
+        Args:
+            file_path: Path to DWD HDF5 file
+
+        Returns:
+            Dictionary with extent and dimensions
+        """
+        try:
+            with h5py.File(file_path, "r") as f:
+                # Read only projection metadata - no data array loaded
+                where_attrs = dict(f["where"].attrs) if "where" in f else {}
+
+                # Get projection definition
+                proj_def = None
+                if "where" in f and "projdef" in f["where"].attrs:
+                    proj_def = f["where"].attrs["projdef"]
+                    if isinstance(proj_def, bytes):
+                        proj_def = proj_def.decode("utf-8")
+
+                # Get dimensions from dataset shape WITHOUT loading data
+                dimensions = f["dataset1/data1/data"].shape
+
+                # Calculate extent from projection corners only (no meshgrid)
+                extent_bounds = projection_handler.calculate_dwd_extent(
+                    where_attrs, proj_def
+                )
+
+                return {
+                    "extent": {"wgs84": extent_bounds},
+                    "dimensions": dimensions,
+                }
+        except Exception as e:
+            raise RuntimeError(f"Failed to extract DWD extent from {file_path}: {e}")
 
     # cleanup_temp_files() is inherited from RadarSource base class

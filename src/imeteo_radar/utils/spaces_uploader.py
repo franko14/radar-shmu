@@ -17,7 +17,6 @@ If credentials are not available, upload is disabled and processing continues lo
 
 import os
 from pathlib import Path
-from typing import Optional
 
 try:
     import boto3
@@ -106,9 +105,7 @@ class SpacesUploader:
             else:
                 raise ValueError(f"Failed to connect to DigitalOcean Spaces: {e}")
 
-    def upload_file(
-        self, local_path: Path, source: str, filename: str
-    ) -> Optional[str]:
+    def upload_file(self, local_path: Path, source: str, filename: str) -> str | None:
         """
         Upload a file to DigitalOcean Spaces
 

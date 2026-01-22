@@ -6,11 +6,9 @@ Supports multiple products per source and handles different timestamp formats.
 """
 
 import logging
-import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 try:
     from PIL import Image
@@ -61,7 +59,7 @@ class RadarAnimator:
         self.frame_duration = int(1000 / fps)  # Duration in milliseconds
         self.loop = loop
 
-    def parse_timestamp(self, filename: str, source: str) -> Optional[datetime]:
+    def parse_timestamp(self, filename: str, source: str) -> datetime | None:
         """
         Parse timestamp from filename based on source format.
 
@@ -99,7 +97,7 @@ class RadarAnimator:
 
     def find_png_files(
         self, directory: Path, source: str, product: str = None
-    ) -> List[Tuple[Path, datetime]]:
+    ) -> list[tuple[Path, datetime]]:
         """
         Find PNG files for a specific source and optionally product.
 
@@ -134,7 +132,7 @@ class RadarAnimator:
         png_files.sort(key=lambda x: x[1])
         return png_files
 
-    def get_time_range_string(self, timestamps: List[datetime]) -> Tuple[str, str, str]:
+    def get_time_range_string(self, timestamps: list[datetime]) -> tuple[str, str, str]:
         """
         Get formatted time range strings for animation naming.
 
@@ -159,7 +157,7 @@ class RadarAnimator:
 
     def create_animation(
         self,
-        png_files: List[Tuple[Path, datetime]],
+        png_files: list[tuple[Path, datetime]],
         output_path: Path,
         optimize: bool = True,
     ) -> bool:
@@ -185,7 +183,7 @@ class RadarAnimator:
         try:
             # Load images
             images = []
-            for file_path, timestamp in png_files:
+            for file_path, _timestamp in png_files:
                 try:
                     img = Image.open(file_path)
                     # Convert to RGB if necessary (removes alpha channel for better compression)
@@ -226,7 +224,7 @@ class RadarAnimator:
 
     def create_source_animation(
         self, source_dir: Path, source: str, output_dir: Path, product: str = None
-    ) -> Dict[str, bool]:
+    ) -> dict[str, bool]:
         """
         Create animations for a specific source, handling multiple products if needed.
 
@@ -292,8 +290,8 @@ class RadarAnimator:
         return results
 
     def create_all_animations(
-        self, data_dir: Path, output_dir: Path, sources: List[str] = None
-    ) -> Dict[str, Dict[str, bool]]:
+        self, data_dir: Path, output_dir: Path, sources: list[str] = None
+    ) -> dict[str, dict[str, bool]]:
         """
         Create animations for all specified sources.
 

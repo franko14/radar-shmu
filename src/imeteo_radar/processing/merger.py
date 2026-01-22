@@ -5,12 +5,12 @@ Radar Data Merger
 Merges radar data from multiple sources (SHMU, DWD) into unified composites.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
 
-from ..core.base import lonlat_to_mercator, mercator_to_lonlat
+from ..core.base import lonlat_to_mercator
 
 
 class RadarMerger:
@@ -26,11 +26,11 @@ class RadarMerger:
 
     def merge_sources(
         self,
-        timestamp_data: Dict[str, List[Dict[str, Any]]],
-        source_data: Dict[str, Dict[str, Any]],
+        timestamp_data: dict[str, list[dict[str, Any]]],
+        source_data: dict[str, dict[str, Any]],
         strategy: str = "average",
-        target_resolution: Optional[Tuple[int, int]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        target_resolution: tuple[int, int] | None = None,
+    ) -> dict[str, Any] | None:
         """
         Merge radar data from multiple sources for a specific timestamp
 
@@ -122,9 +122,9 @@ class RadarMerger:
 
     def _compute_target_grid(
         self,
-        source_data: Dict[str, Dict[str, Any]],
-        target_resolution: Optional[Tuple[int, int]],
-    ) -> Tuple[Dict[str, Any], Tuple[int, int]]:
+        source_data: dict[str, dict[str, Any]],
+        target_resolution: tuple[int, int] | None,
+    ) -> tuple[dict[str, Any], tuple[int, int]]:
         """Compute target grid that encompasses all sources"""
 
         # Find combined extent
@@ -182,10 +182,10 @@ class RadarMerger:
 
     def _regrid_to_target(
         self,
-        file_data: Dict[str, Any],
-        target_extent: Dict[str, Any],
-        target_shape: Tuple[int, int],
-    ) -> Optional[np.ndarray]:
+        file_data: dict[str, Any],
+        target_extent: dict[str, Any],
+        target_shape: tuple[int, int],
+    ) -> np.ndarray | None:
         """Regrid source data to target grid"""
 
         try:
@@ -204,10 +204,10 @@ class RadarMerger:
     def _regrid_data_fast(
         self,
         source_data: np.ndarray,
-        source_coords: Dict[str, np.ndarray],
-        target_extent: Dict[str, np.ndarray],
-        target_shape: Tuple[int, int],
-    ) -> Optional[np.ndarray]:
+        source_coords: dict[str, np.ndarray],
+        target_extent: dict[str, np.ndarray],
+        target_shape: tuple[int, int],
+    ) -> np.ndarray | None:
         """Fast regridding using OpenCV remap (8-15x faster than scipy)"""
         try:
             print(f"🚀 Fast regridding: {source_data.shape} → {target_shape}")
@@ -224,18 +224,8 @@ class RadarMerger:
             target_lats = target_extent["lats"]
             target_lons = target_extent["lons"]
 
-            # Handle both 1D and 2D coordinate arrays
-            # DWD now provides 2D coordinates due to projection handling
-            if source_lats.ndim == 2:
-                # For 2D arrays, extract edges for orientation check
-                lat_edge = source_lats[:, 0]  # Left edge
-                lon_edge = source_lons[0, :]  # Top edge
-            else:
-                # For 1D arrays, use directly
-                lat_edge = source_lats
-                lon_edge = source_lons
-
             # Ensure data is in correct orientation (ascending coordinates) only for 1D
+            # Note: 2D coordinate arrays (DWD) skip orientation check - projection handles it
             if source_lats.ndim == 1:
                 if source_lats[0] > source_lats[-1]:
                     source_lats = source_lats[::-1]
@@ -347,7 +337,7 @@ class RadarMerger:
                 source_data, source_coords, target_extent, target_shape
             )
 
-    def _average_merge(self, regridded_data: Dict[str, np.ndarray]) -> np.ndarray:
+    def _average_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Improved average merge strategy with quality control and range clipping"""
 
         print("📊 Applying average merge strategy")
@@ -395,7 +385,7 @@ class RadarMerger:
 
         return merged
 
-    def _priority_merge(self, regridded_data: Dict[str, np.ndarray]) -> np.ndarray:
+    def _priority_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Priority merge - use first source, fill gaps with others"""
 
         print("🎯 Applying priority merge strategy")
@@ -416,7 +406,7 @@ class RadarMerger:
 
         return merged
 
-    def _weighted_merge(self, regridded_data: Dict[str, np.ndarray]) -> np.ndarray:
+    def _weighted_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Weighted merge based on distance from radar centers and data quality"""
 
         print("⚖️  Applying weighted merge strategy")
@@ -427,8 +417,7 @@ class RadarMerger:
             "dwd": (10.0, 51.5),  # Central Germany (approximate)
         }
 
-        # Get target grid coordinates (assuming first source has coordinate info)
-        first_source = list(regridded_data.keys())[0]
+        # Get target grid coordinates
         if hasattr(self, "_last_target_coords"):
             target_lons, target_lats = self._last_target_coords
         else:
@@ -517,7 +506,7 @@ class RadarMerger:
 
         return merged
 
-    def _max_merge(self, regridded_data: Dict[str, np.ndarray]) -> np.ndarray:
+    def _max_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Maximum value merge - take highest reflectivity"""
 
         print("📈 Applying maximum merge strategy")
@@ -538,10 +527,10 @@ class RadarMerger:
     def _regrid_data(
         self,
         source_data: np.ndarray,
-        source_coords: Dict[str, np.ndarray],
-        target_extent: Dict[str, np.ndarray],
-        target_shape: Tuple[int, int],
-    ) -> Optional[np.ndarray]:
+        source_coords: dict[str, np.ndarray],
+        target_extent: dict[str, np.ndarray],
+        target_shape: tuple[int, int],
+    ) -> np.ndarray | None:
         """Fallback regridding using basic interpolation"""
         try:
             from scipy.interpolate import RegularGridInterpolator

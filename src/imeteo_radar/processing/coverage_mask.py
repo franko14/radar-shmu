@@ -10,7 +10,7 @@ Generates PNG files showing radar coverage:
 import glob
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import h5py
 import numpy as np
@@ -29,7 +29,7 @@ UNCOVERED_COLOR = (128, 128, 128, 255)  # Gray, fully opaque
 
 # Nodata values for each source (used to detect coverage boundary)
 # These are the raw values that indicate "outside radar coverage"
-NODATA_VALUES: Dict[str, int] = {
+NODATA_VALUES: dict[str, int] = {
     "dwd": 65535,  # uint16 max
     "shmu": 255,  # uint8 max
     "chmi": 255,  # uint8 max
@@ -38,7 +38,7 @@ NODATA_VALUES: Dict[str, int] = {
 }
 
 # Source extents in WGS84 (for composite calculation)
-SOURCE_EXTENTS: Dict[str, Dict[str, float]] = {
+SOURCE_EXTENTS: dict[str, dict[str, float]] = {
     "dwd": {"west": 2.5, "east": 18.0, "south": 45.5, "north": 56.0},
     "shmu": {"west": 13.6, "east": 23.8, "south": 46.0, "north": 50.7},
     "chmi": {"west": 12.0, "east": 19.0, "south": 48.5, "north": 51.1},
@@ -52,7 +52,7 @@ SOURCE_EXTENTS: Dict[str, Dict[str, float]] = {
 }
 
 
-def _load_extent_index(output_dir: str) -> Optional[Dict[str, Any]]:
+def _load_extent_index(output_dir: str) -> dict[str, Any] | None:
     """
     Load extent_index.json from output directory.
 
@@ -70,7 +70,7 @@ def _load_extent_index(output_dir: str) -> Optional[Dict[str, Any]]:
 
 
 def _resize_coverage_to_target(
-    coverage: np.ndarray, target_shape: Tuple[int, int]
+    coverage: np.ndarray, target_shape: tuple[int, int]
 ) -> np.ndarray:
     """Resize coverage array to match target dimensions using nearest neighbor."""
     if coverage.shape == target_shape:
@@ -104,7 +104,7 @@ def _save_coverage_mask_png(coverage: np.ndarray, output_path: str) -> str:
     return output_path
 
 
-def _read_raw_hdf5_data(file_path: str) -> Tuple[np.ndarray, int]:
+def _read_raw_hdf5_data(file_path: str) -> tuple[np.ndarray, int]:
     """
     Read raw data from HDF5 file without NaN conversion.
 
@@ -159,7 +159,7 @@ def _read_raw_hdf5_data(file_path: str) -> Tuple[np.ndarray, int]:
         return data, nodata
 
 
-def _read_raw_netcdf_data(file_path: str) -> Tuple[np.ndarray, int]:
+def _read_raw_netcdf_data(file_path: str) -> tuple[np.ndarray, int]:
     """
     Read raw data from netCDF file (OMSZ format).
 
@@ -192,7 +192,7 @@ def _read_raw_netcdf_data(file_path: str) -> Tuple[np.ndarray, int]:
         return data, 255
 
 
-def _read_raw_arso_data(file_path: str) -> Tuple[np.ndarray, int]:
+def _read_raw_arso_data(file_path: str) -> tuple[np.ndarray, int]:
     """
     Read raw data from ARSO SRD-3 binary file.
 
@@ -250,7 +250,7 @@ def _read_raw_arso_data(file_path: str) -> Tuple[np.ndarray, int]:
     return data, -1
 
 
-def get_coverage_from_source(source_name: str) -> Optional[np.ndarray]:
+def get_coverage_from_source(source_name: str) -> np.ndarray | None:
     """
     Download latest radar file and extract coverage mask.
 
@@ -310,7 +310,7 @@ def get_coverage_from_source(source_name: str) -> Optional[np.ndarray]:
         return None
 
 
-def _get_target_dimensions_from_pngs(output_dir: str) -> Optional[Tuple[int, int]]:
+def _get_target_dimensions_from_pngs(output_dir: str) -> tuple[int, int] | None:
     """Get target dimensions from existing radar PNG files in the output directory."""
     # Find PNG files (excluding coverage_mask.png itself)
     png_files = glob.glob(os.path.join(output_dir, "*.png"))
@@ -327,7 +327,7 @@ def _get_target_dimensions_from_pngs(output_dir: str) -> Optional[Tuple[int, int
 
 def generate_source_coverage_mask(
     source_name: str, output_dir: str, filename: str = "coverage_mask.png"
-) -> Optional[str]:
+) -> str | None:
     """
     Generate a coverage mask PNG for a single radar source.
 
@@ -377,9 +377,9 @@ def generate_source_coverage_mask(
 
 def _reproject_coverage_to_composite(
     coverage: np.ndarray,
-    source_extent: Dict[str, float],
-    composite_extent: Dict[str, float],
-    composite_shape: Tuple[int, int],
+    source_extent: dict[str, float],
+    composite_extent: dict[str, float],
+    composite_shape: tuple[int, int],
 ) -> np.ndarray:
     """
     Reproject a source coverage mask to the composite grid.
@@ -446,11 +446,11 @@ def _reproject_coverage_to_composite(
 
 
 def generate_composite_coverage_mask(
-    sources: Optional[List[str]] = None,
+    sources: list[str] | None = None,
     output_dir: str = "/tmp/composite",
     filename: str = "coverage_mask.png",
     resolution_m: float = 500.0,
-) -> Optional[str]:
+) -> str | None:
     """
     Generate a composite coverage mask PNG from multiple sources.
 
@@ -470,7 +470,7 @@ def generate_composite_coverage_mask(
     if sources is None:
         sources = get_all_source_names()
 
-    print(f"📐 Generating composite coverage mask...")
+    print("📐 Generating composite coverage mask...")
     print(f"   Sources: {', '.join(s.upper() for s in sources)}")
 
     # First, try to get dimensions from existing composite PNGs
@@ -491,7 +491,7 @@ def generate_composite_coverage_mask(
         combined_extent = extent_info.get("extent")
         metadata = extent_info.get("metadata", {})
         resolution_m = metadata.get("resolution_m", resolution_m)
-        print(f"   Using extent from extent_index.json")
+        print("   Using extent from extent_index.json")
         print(f"   Resolution: {resolution_m}m")
 
     if combined_extent is None:
@@ -583,7 +583,7 @@ def generate_composite_coverage_mask(
 
 def generate_all_coverage_masks(
     output_base_dir: str = "/tmp", resolution_m: float = 500.0
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Generate coverage masks for all sources and composite.
 

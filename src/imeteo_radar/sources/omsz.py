@@ -11,8 +11,7 @@ import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import netCDF4 as nc
 import numpy as np
@@ -59,11 +58,11 @@ class OMSZRadarSource(RadarSource):
         self.gain = 0.5
         self.offset = -32.0
 
-    def get_available_products(self) -> List[str]:
+    def get_available_products(self) -> list[str]:
         """Get list of available OMSZ radar products"""
         return list(self.product_mapping.keys())
 
-    def get_product_metadata(self, product: str) -> Dict[str, Any]:
+    def get_product_metadata(self, product: str) -> dict[str, Any]:
         """Get metadata for a specific OMSZ product"""
         if product in self.product_info:
             return {
@@ -73,7 +72,7 @@ class OMSZRadarSource(RadarSource):
             }
         return super().get_product_metadata(product)
 
-    def _generate_timestamps(self, count: int) -> List[str]:
+    def _generate_timestamps(self, count: int) -> list[str]:
         """Generate recent timestamps to search for available data"""
         timestamps = []
         import pytz
@@ -109,8 +108,8 @@ class OMSZRadarSource(RadarSource):
             return False
 
     def _filter_timestamps_by_range(
-        self, timestamps: List[str], start_time: datetime, end_time: datetime
-    ) -> List[str]:
+        self, timestamps: list[str], start_time: datetime, end_time: datetime
+    ) -> list[str]:
         """Filter timestamps to only include those within the specified time range
 
         Args:
@@ -200,7 +199,7 @@ class OMSZRadarSource(RadarSource):
             if os.path.exists(tmp_zip_path):
                 os.unlink(tmp_zip_path)
 
-    def _download_single_file(self, timestamp: str, product: str) -> Dict[str, Any]:
+    def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
             return {
@@ -254,10 +253,10 @@ class OMSZRadarSource(RadarSource):
     def download_latest(
         self,
         count: int,
-        products: Optional[List[str]] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-    ) -> List[Dict[str, Any]]:
+        products: list[str] | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """Download latest OMSZ radar data
 
         Args:
@@ -273,7 +272,7 @@ class OMSZRadarSource(RadarSource):
             products = ["cmax"]  # Default to ZMAX equivalent
 
         print(f"[OMSZ] Finding last {count} available timestamps...")
-        print(f"[OMSZ] Checking server for current timestamps...")
+        print("[OMSZ] Checking server for current timestamps...")
 
         # Generate more timestamps if we're filtering by time range
         multiplier = 8 if (start_time and end_time) else 4
@@ -356,7 +355,7 @@ class OMSZRadarSource(RadarSource):
 
         return downloaded_files
 
-    def process_to_array(self, file_path: str) -> Dict[str, Any]:
+    def process_to_array(self, file_path: str) -> dict[str, Any]:
         """Process OMSZ netCDF file to array with metadata
 
         The netCDF structure:
@@ -455,7 +454,7 @@ class OMSZRadarSource(RadarSource):
         except Exception as e:
             raise RuntimeError(f"Failed to process OMSZ file {file_path}: {e}")
 
-    def get_extent(self) -> Dict[str, Any]:
+    def get_extent(self) -> dict[str, Any]:
         """Get OMSZ radar coverage extent
 
         Based on actual netCDF data:
@@ -484,6 +483,59 @@ class OMSZRadarSource(RadarSource):
             "grid_size": [813, 961],  # [height, width]
             "resolution_m": [890, 930],  # Approximate [y_res, x_res] in meters
         }
+
+    def extract_extent_only(self, file_path: str) -> dict[str, Any]:
+        """Extract extent from OMSZ netCDF without loading data array.
+
+        MEMORY OPTIMIZATION: Reads only coordinate parameters (~100 bytes)
+        instead of loading the full data array (~6 MB for OMSZ grid).
+
+        Args:
+            file_path: Path to OMSZ netCDF file
+
+        Returns:
+            Dictionary with extent and dimensions
+        """
+        try:
+            with nc.Dataset(file_path, "r") as dataset:
+                # Determine which variable to check based on filename
+                if "refl2D_pscappi" in file_path:
+                    var_name = "refl2D_pscappi"
+                elif "refl3D" in file_path:
+                    var_name = "refl3D"
+                else:
+                    var_name = "refl2D"
+
+                # Get dimensions WITHOUT loading data
+                dimensions = dataset.variables[var_name].shape
+
+                # Get coordinate parameters
+                la1 = float(dataset.variables["La1"][:])  # First latitude (north)
+                lo1 = float(dataset.variables["Lo1"][:])  # First longitude (west)
+                dx = float(dataset.variables["Dx"][:])  # Longitude increment
+                dy = float(dataset.variables["Dy"][:])  # Latitude increment
+
+                n_lat, n_lon = dimensions
+
+                # Calculate extent (la1 is the NORTH boundary for OMSZ)
+                north = la1
+                south = la1 - (n_lat - 1) * dy
+                west = lo1
+                east = lo1 + (n_lon - 1) * dx
+
+                return {
+                    "extent": {
+                        "wgs84": {
+                            "west": west,
+                            "east": east,
+                            "south": south,
+                            "north": north,
+                        }
+                    },
+                    "dimensions": dimensions,
+                }
+        except Exception as e:
+            raise RuntimeError(f"Failed to extract OMSZ extent from {file_path}: {e}")
 
     def cleanup_temp_files(self) -> int:
         """Clean up temporary files and parent temp directories.
