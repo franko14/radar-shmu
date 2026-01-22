@@ -5,6 +5,22 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-01-22
+
+### Changed
+- **Memory optimization**: Reduced peak memory usage by ~50%
+  - Compositor: Tile-based processing (1000×1000 pixels) instead of full grid
+  - Compositor: On-demand target point generation (saves 169 MB)
+  - Projection: Return 1D coordinate arrays instead of 2D meshgrid (saves ~300 MB)
+  - CLI: Add gc.collect() after individual PNG exports
+  - Peak memory: ~1700 MB → ~850 MB (with `--no-individual` flag)
+
+### Technical
+- Modernized type hints: `Dict` → `dict`, `List` → `list`, `Optional[X]` → `X | None`
+- Added ruff linter configuration (replaces flake8/isort/black)
+- Added psutil to profiling optional dependencies
+- Updated README with all 5 radar sources and new CLI options
+
 ## [2.1.0] - 2026-01-15
 
 ### Added
