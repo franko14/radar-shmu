@@ -16,7 +16,6 @@ Usage:
 """
 
 import matplotlib.colors as mcolors
-import numpy as np
 
 
 def get_shmu_colormap():
@@ -73,7 +72,7 @@ def get_shmu_colormap():
             lower_key = None
             upper_key = None
 
-            for i, key in enumerate(sorted_keys):
+            for _i, key in enumerate(sorted_keys):
                 if key <= dbz:
                     lower_key = key
                 if key > dbz and upper_key is None:
@@ -158,7 +157,7 @@ if __name__ == "__main__":
     print(f"Colormap name: {cmap.name}")
 
     # Show sample colors
-    print(f"\nSample colors:")
+    print("\nSample colors:")
     test_values = [-35, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70, 85]
     for dbz in test_values:
         color = get_color_for_dbz(dbz)

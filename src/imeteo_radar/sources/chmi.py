@@ -5,18 +5,21 @@ CHMI (Czech Hydrometeorological Institute) Radar Source
 Handles downloading and processing of CHMI radar data in ODIM_H5 format.
 """
 
-import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import h5py
 import numpy as np
 import requests
 
-from ..core.base import RadarData, RadarSource, lonlat_to_mercator
+from ..core.base import (
+    RadarSource,
+    extract_hdf5_corner_extent,
+    lonlat_to_mercator,
+)
 
 
 class CHMIRadarSource(RadarSource):
@@ -43,11 +46,11 @@ class CHMIRadarSource(RadarSource):
         }
         # temp_files is initialized in base class
 
-    def get_available_products(self) -> List[str]:
+    def get_available_products(self) -> list[str]:
         """Get list of available CHMI radar products"""
         return list(self.product_mapping.keys())
 
-    def get_product_metadata(self, product: str) -> Dict[str, Any]:
+    def get_product_metadata(self, product: str) -> dict[str, Any]:
         """Get metadata for a specific CHMI product"""
         if product in self.product_info:
             return {
@@ -57,7 +60,7 @@ class CHMIRadarSource(RadarSource):
             }
         return super().get_product_metadata(product)
 
-    def _generate_timestamps(self, count: int) -> List[str]:
+    def _generate_timestamps(self, count: int) -> list[str]:
         """Generate recent timestamps to search for available data"""
         timestamps = []
         import pytz
@@ -89,12 +92,12 @@ class CHMIRadarSource(RadarSource):
         try:
             response = requests.head(url, timeout=5)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
 
     def _filter_timestamps_by_range(
-        self, timestamps: List[str], start_time: datetime, end_time: datetime
-    ) -> List[str]:
+        self, timestamps: list[str], start_time: datetime, end_time: datetime
+    ) -> list[str]:
         """Filter timestamps to only include those within the specified time range
 
         Args:
@@ -136,7 +139,7 @@ class CHMIRadarSource(RadarSource):
 
         return f"{self.base_url}/T_{product_code}_C_OKPR_{timestamp}.hdf"
 
-    def _download_single_file(self, timestamp: str, product: str) -> Dict[str, Any]:
+    def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
             return {
@@ -196,10 +199,10 @@ class CHMIRadarSource(RadarSource):
     def download_latest(
         self,
         count: int,
-        products: List[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-    ) -> List[Dict[str, Any]]:
+        products: list[str] = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """Download latest CHMI radar data
 
         Args:
@@ -215,7 +218,7 @@ class CHMIRadarSource(RadarSource):
         print(f"🔍 Finding last {count} available CHMI timestamps...")
 
         # Strategy: Check for current timestamps online
-        print(f"🌐 Checking CHMI server for current timestamps...")
+        print("🌐 Checking CHMI server for current timestamps...")
 
         # Generate more timestamps if we're filtering by time range
         multiplier = 8 if (start_time and end_time) else 4
@@ -290,11 +293,11 @@ class CHMIRadarSource(RadarSource):
                     print(f"❌ Exception {product} {timestamp}: {e}")
 
         print(
-            f"📋 CHMI: Downloaded {len(downloaded_files)} files ({len(download_tasks)-len(downloaded_files)} failed)"
+            f"📋 CHMI: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)"
         )
         return downloaded_files
 
-    def process_to_array(self, file_path: str) -> Dict[str, Any]:
+    def process_to_array(self, file_path: str) -> dict[str, Any]:
         """Process CHMI HDF5 file to array with metadata"""
 
         try:
@@ -393,7 +396,7 @@ class CHMIRadarSource(RadarSource):
         units_map = {"DBZH": "dBZ", "TH": "dBZ"}
         return units_map.get(quantity, "dBZ")  # Default to dBZ for reflectivity
 
-    def get_extent(self) -> Dict[str, Any]:
+    def get_extent(self) -> dict[str, Any]:
         """Get CHMI radar coverage extent"""
 
         # CHMI radar coverage (approximate, covering Czech Republic)
@@ -416,5 +419,14 @@ class CHMIRadarSource(RadarSource):
             "grid_size": None,  # To be determined from actual data
             "resolution_m": None,  # To be determined from actual data
         }
+
+    def extract_extent_only(self, file_path: str) -> dict[str, Any]:
+        """Extract extent from CHMI HDF5 without loading data array.
+
+        Uses shared HDF5 corner extraction from base module with Czech fallback.
+        """
+        # Fallback extent for Czech Republic
+        fallback = {"west": 12.0, "east": 19.0, "south": 48.5, "north": 51.1}
+        return extract_hdf5_corner_extent(file_path, fallback_extent=fallback)
 
     # cleanup_temp_files() is inherited from RadarSource base class

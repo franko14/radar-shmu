@@ -7,13 +7,12 @@ reflectivity strategy. Handles reprojection to common Web Mercator grid.
 """
 
 import gc
-import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from ..core.base import lonlat_to_mercator, mercator_to_lonlat
+from ..core.base import lonlat_to_mercator
 from ..core.projection import ProjectionHandler
 
 
@@ -24,10 +23,13 @@ class RadarCompositor:
     Memory-efficient implementation:
     - Process sources sequentially, not all at once
     - Clear each source after merging
-    - Target: <1.2 GB total memory usage
+    - Use float32 for coordinates (50% memory reduction)
+    - Tile-based interpolation (1000x1000 tiles, ~4 MB per tile)
+    - Generate target points on-demand per tile (saves 169 MB)
+    - Target: <1 GB total memory usage
     """
 
-    def __init__(self, target_extent: Dict[str, float], resolution_m: float = 500.0):
+    def __init__(self, target_extent: dict[str, float], resolution_m: float = 500.0):
         """
         Initialize compositor with target grid.
 
@@ -82,9 +84,13 @@ class RadarCompositor:
             "north": north_m,
         }
 
-        # Create coordinate arrays for target grid
-        self.target_x = np.linspace(west_m, east_m, self.grid_width)
-        self.target_y = np.linspace(north_m, south_m, self.grid_height)
+        # Create 1D coordinate arrays for target grid (float32 saves 50% memory)
+        # These are small: 21 KB + 16 KB for typical 5360x4190 grid
+        self.target_x = np.linspace(west_m, east_m, self.grid_width, dtype=np.float32)
+        self.target_y = np.linspace(north_m, south_m, self.grid_height, dtype=np.float32)
+
+        # DON'T pre-allocate target_points - generate on-demand per tile
+        # This saves ~169 MB (22M points × 2 coords × 4 bytes)
 
         print(
             f"🎯 Target grid: {self.grid_width}×{self.grid_height} pixels "
@@ -95,7 +101,36 @@ class RadarCompositor:
             f"{self.target_extent['south']:.2f}°N to {self.target_extent['north']:.2f}°N"
         )
 
-    def add_source(self, source_name: str, radar_data: Dict[str, Any]) -> bool:
+    def _generate_tile_target_points(
+        self, row_start: int, row_end: int, col_start: int, col_end: int
+    ) -> np.ndarray:
+        """
+        Generate target grid points for a specific spatial tile.
+
+        Instead of pre-allocating 22M points (169 MB), this generates only
+        the points needed for each tile (~1M points, ~4 MB).
+
+        Args:
+            row_start: Starting row index (inclusive)
+            row_end: Ending row index (exclusive)
+            col_start: Starting column index (inclusive)
+            col_end: Ending column index (exclusive)
+
+        Returns:
+            2D array of shape (tile_pixels, 2) with (y, x) Mercator coordinates
+        """
+        tile_x = self.target_x[col_start:col_end]
+        tile_y = self.target_y[row_start:row_end]
+
+        tile_xx, tile_yy = np.meshgrid(tile_x, tile_y, indexing="xy")
+        tile_points = np.column_stack([tile_yy.ravel(), tile_xx.ravel()]).astype(
+            np.float32
+        )
+
+        del tile_xx, tile_yy
+        return tile_points
+
+    def add_source(self, source_name: str, radar_data: dict[str, Any]) -> bool:
         """
         Add data from one radar source and merge using maximum reflectivity.
 
@@ -122,7 +157,7 @@ class RadarCompositor:
             if coordinates is None:
                 cache_key = source_name
                 if cache_key not in self.coordinate_cache:
-                    print(f"   Generating coordinates from HDF5 metadata...")
+                    print("   Generating coordinates from HDF5 metadata...")
                     coordinates = self._generate_coordinates_from_metadata(
                         radar_data["dimensions"],
                         radar_data["extent"],
@@ -130,7 +165,7 @@ class RadarCompositor:
                     )
                     self.coordinate_cache[cache_key] = coordinates
                 else:
-                    print(f"   Using cached coordinates...")
+                    print("   Using cached coordinates...")
                     coordinates = self.coordinate_cache[cache_key]
 
             # Get source coordinates
@@ -148,21 +183,25 @@ class RadarCompositor:
                 source_lon_1d = source_lons[0, :]  # First row
                 source_lat_1d = source_lats[:, 0]  # First column
 
-            # Convert source coordinate grid to Web Mercator
-            # Create meshgrid for transformation
-            source_lons_2d, source_lats_2d = np.meshgrid(source_lon_1d, source_lat_1d)
+            # Clear coordinate cache immediately after extracting 1D arrays
+            # Saves ~152 MB for DWD (2D coordinate arrays)
+            if source_name in self.coordinate_cache:
+                del self.coordinate_cache[source_name]
 
-            # Convert to Mercator using vectorized operation (100-1000x faster!)
+            # Convert 1D coordinate arrays directly to Web Mercator
+            # MEMORY OPTIMIZATION: No 2D meshgrid needed - saves ~500 MB for DWD
+            # Mercator x depends only on longitude, y depends only on latitude
             print(
-                f"   Converting {source_lons_2d.size:,} coordinates to Mercator (vectorized)..."
-            )
-            source_x_2d, source_y_2d = lonlat_to_mercator(
-                source_lons_2d, source_lats_2d
+                f"   Converting {len(source_lon_1d) + len(source_lat_1d):,} coordinates to Mercator..."
             )
 
-            # Create 1D coordinate vectors in Mercator (for RegularGridInterpolator)
-            source_x_1d = source_x_2d[0, :]  # X varies along columns
-            source_y_1d = source_y_2d[:, 0]  # Y varies along rows
+            # Direct 1D conversion formulas (same as lonlat_to_mercator but for 1D arrays)
+            source_x_1d = (source_lon_1d * 20037508.34 / 180.0).astype(np.float32)
+            source_y_1d = (
+                np.log(np.tan((90.0 + source_lat_1d) * np.pi / 360.0))
+                * 20037508.34
+                / np.pi
+            ).astype(np.float32)
 
             # Count valid data
             valid_mask = ~np.isnan(source_data)
@@ -175,12 +214,12 @@ class RadarCompositor:
 
             print(
                 f"   Valid pixels: {valid_count:,} / {total_count:,} "
-                f"({100*valid_count/total_count:.1f}%)"
+                f"({100 * valid_count / total_count:.1f}%)"
             )
 
             # Create RegularGridInterpolator with source data
             # Use 'nearest' method to preserve discrete dBZ values and avoid smoothing
-            print(f"   Creating regular grid interpolator...")
+            print("   Creating regular grid interpolator...")
             interpolator = RegularGridInterpolator(
                 (source_y_1d, source_x_1d),  # Note: y first (rows), x second (cols)
                 source_data,
@@ -189,38 +228,59 @@ class RadarCompositor:
                 fill_value=np.nan,
             )
 
-            # Create target grid points
-            target_xx, target_yy = np.meshgrid(self.target_x, self.target_y)
-            target_points = np.column_stack([target_yy.ravel(), target_xx.ravel()])
+            # Tile-based processing (1000x1000 pixel tiles)
+            # Generates target points on-demand per tile (~4 MB) instead of
+            # pre-allocating full 22M points (169 MB)
+            print("   Resampling to target grid (tile-based)...")
+            tile_size = 1000
+            in_bounds_count = 0
+            before_count = np.count_nonzero(~np.isnan(self.composite_data))
 
-            # Interpolate to target grid
-            print(f"   Resampling to target grid...")
-            interpolated_flat = interpolator(target_points)
-            interpolated = interpolated_flat.reshape(self.grid_height, self.grid_width)
+            for row_start in range(0, self.grid_height, tile_size):
+                row_end = min(row_start + tile_size, self.grid_height)
 
-            # Count in-bounds pixels (non-NaN after interpolation)
-            in_bounds_count = np.sum(~np.isnan(interpolated))
+                for col_start in range(0, self.grid_width, tile_size):
+                    col_end = min(col_start + tile_size, self.grid_width)
+
+                    # Generate target points for just this tile (~4 MB)
+                    tile_points = self._generate_tile_target_points(
+                        row_start, row_end, col_start, col_end
+                    )
+
+                    # Interpolate this tile
+                    tile_interpolated = interpolator(tile_points)
+
+                    # Count valid pixels in tile
+                    in_bounds_count += np.sum(~np.isnan(tile_interpolated))
+
+                    # Reshape to tile dimensions
+                    tile_height = row_end - row_start
+                    tile_width = col_end - col_start
+                    tile_result = tile_interpolated.reshape(tile_height, tile_width)
+
+                    # Merge into composite using NaN-aware max (2D slicing)
+                    current = self.composite_data[row_start:row_end, col_start:col_end]
+                    self.composite_data[row_start:row_end, col_start:col_end] = np.fmax(
+                        current, tile_result
+                    )
+
+                    # Free tile memory
+                    del tile_points, tile_interpolated, tile_result, current
+
             if in_bounds_count == 0:
                 print(f"⚠️  No data from {source_name} overlaps target extent, skipping")
                 return False
 
-            print(f"   In-bounds pixels: {in_bounds_count:,}")
-
-            # Merge using maximum reflectivity (element-wise max, NaN-aware)
-            # np.fmax ignores NaN values (unlike np.maximum)
-            before_count = np.count_nonzero(~np.isnan(self.composite_data))
-            self.composite_data = np.fmax(self.composite_data, interpolated)
             after_count = np.count_nonzero(~np.isnan(self.composite_data))
-
             new_pixels = after_count - before_count
+            print(f"   In-bounds pixels: {in_bounds_count:,}")
             print(f"   ✅ Merged: +{new_pixels:,} new pixels, total: {after_count:,}")
 
             # Track merged sources
             self.sources_merged.append(source_name)
 
-            # Cleanup
-            del interpolated, target_xx, target_yy, target_points
-            del source_x_2d, source_y_2d, source_lons_2d, source_lats_2d
+            # Cleanup - release interpolator
+            # Note: coordinate cache already cleared earlier in this method
             del interpolator
             gc.collect()
 
@@ -235,10 +295,10 @@ class RadarCompositor:
 
     def _generate_coordinates_from_metadata(
         self,
-        dimensions: Tuple[int, int],
-        extent: Dict[str, Any],
-        projection_info: Optional[Dict[str, Any]],
-    ) -> Dict[str, np.ndarray]:
+        dimensions: tuple[int, int],
+        extent: dict[str, Any],
+        projection_info: dict[str, Any] | None,
+    ) -> dict[str, np.ndarray]:
         """
         Generate coordinates from real HDF5 metadata.
 
@@ -255,7 +315,7 @@ class RadarCompositor:
         """
         if projection_info and projection_info.get("type") == "stereographic":
             # DWD: Use projection_handler with REAL HDF5 metadata
-            print(f"      Using stereographic projection from HDF5...")
+            print("      Using stereographic projection from HDF5...")
             lons, lats = self.projection_handler.create_dwd_coordinates(
                 shape=dimensions,
                 where_attrs=projection_info["where_attrs"],  # Real HDF5 data
@@ -264,13 +324,13 @@ class RadarCompositor:
             return {"lons": lons, "lats": lats}
         else:
             # SHMU/CHMI: Web Mercator - simple grid from real corner coordinates
-            print(f"      Using Web Mercator grid from HDF5 corner coordinates...")
+            print("      Using Web Mercator grid from HDF5 corner coordinates...")
             wgs84 = extent["wgs84"]
             lons = np.linspace(wgs84["west"], wgs84["east"], dimensions[1])
             lats = np.linspace(wgs84["north"], wgs84["south"], dimensions[0])
             return {"lons": lons, "lats": lats}
 
-    def get_composite(self) -> Dict[str, Any]:
+    def get_composite(self) -> dict[str, Any]:
         """
         Get the final composite data.
 
@@ -301,6 +361,11 @@ class RadarCompositor:
             "total_pixels": total_pixels,
         }
 
+    def clear_cache(self):
+        """Clear coordinate cache to free memory."""
+        self.coordinate_cache.clear()
+        gc.collect()
+
     def get_summary(self) -> str:
         """Get human-readable summary of composite"""
 
@@ -324,10 +389,10 @@ class RadarCompositor:
 
 
 def create_composite(
-    sources_data: List[Tuple[str, Dict[str, Any]]],
+    sources_data: list[tuple[str, dict[str, Any]]],
     resolution_m: float = 500.0,
-    custom_extent: Optional[Dict[str, float]] = None,
-) -> Dict[str, Any]:
+    custom_extent: dict[str, float] | None = None,
+) -> dict[str, Any]:
     """
     Convenience function to create a composite from multiple sources.
 
@@ -360,7 +425,7 @@ def create_composite(
         print("📐 Calculating combined extent from sources...")
 
         all_extents = []
-        for source_name, radar_data in sources_data:
+        for _source_name, radar_data in sources_data:
             if "extent" in radar_data and "wgs84" in radar_data["extent"]:
                 all_extents.append(radar_data["extent"]["wgs84"])
 
@@ -393,5 +458,8 @@ def create_composite(
 
     # Print summary
     print(compositor.get_summary())
+
+    # Clear coordinate cache to free memory
+    compositor.clear_cache()
 
     return result

@@ -7,12 +7,9 @@ Designed for extensibility and production use.
 """
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import numpy as np
+from typing import Any
 
 from ..sources.dwd import DWDRadarSource
 from ..sources.shmu import SHMURadarSource
@@ -33,7 +30,7 @@ class MergedProductsManager:
     - Configurable overlap regions and priorities
     """
 
-    def __init__(self, extent_config_path: Optional[Path] = None):
+    def __init__(self, extent_config_path: Path | None = None):
         self.merger = RadarMerger()
         self.exporter = PNGExporter()
         self.storage = TimePartitionedStorage()
@@ -64,10 +61,10 @@ class MergedProductsManager:
             },
         }
 
-    def _load_extent_config(self, config_path: Path) -> Dict[str, Any]:
+    def _load_extent_config(self, config_path: Path) -> dict[str, Any]:
         """Load extent and source configuration"""
         try:
-            with open(config_path, "r") as f:
+            with open(config_path) as f:
                 config = json.load(f)
             print(f"✅ Loaded extent config: {config_path}")
             return config
@@ -75,7 +72,7 @@ class MergedProductsManager:
             print(f"⚠️  Failed to load extent config: {e}")
             return self._create_default_config()
 
-    def _create_default_config(self) -> Dict[str, Any]:
+    def _create_default_config(self) -> dict[str, Any]:
         """Create default configuration if config file not found"""
         return {
             "sources": {
@@ -104,7 +101,7 @@ class MergedProductsManager:
             }
         }
 
-    def _register_sources(self) -> Dict[str, Any]:
+    def _register_sources(self) -> dict[str, Any]:
         """Register radar sources with metadata"""
         return {
             "shmu": {
@@ -131,13 +128,13 @@ class MergedProductsManager:
             # }
         }
 
-    def get_available_sources(self) -> List[str]:
+    def get_available_sources(self) -> list[str]:
         """Get list of enabled source names"""
         return [name for name, info in self.sources.items() if info["enabled"]]
 
     def find_matching_timestamps(
-        self, sources: List[str], time_range_hours: int = 1, min_sources: int = 2
-    ) -> List[Tuple[datetime, Dict[str, List[str]]]]:
+        self, sources: list[str], time_range_hours: int = 1, min_sources: int = 2
+    ) -> list[tuple[datetime, dict[str, list[str]]]]:
         """
         Find timestamps where data is available from multiple sources
 
@@ -182,7 +179,7 @@ class MergedProductsManager:
 
     def _get_source_timestamps(
         self, source_name: str, hours_back: int
-    ) -> Dict[datetime, List[str]]:
+    ) -> dict[datetime, list[str]]:
         """Get available timestamps and file paths for a source"""
         timestamps = {}
 
@@ -206,7 +203,6 @@ class MergedProductsManager:
                 if time_path.exists():
                     # Find HDF files (processed data)
                     # For SHMU, prioritize zmax (maximum reflectivity) files
-                    pattern = "*.hdf"
                     if source_name == "shmu":
                         # First try to find zmax files, then fallback to any .hdf
                         zmax_files = list(time_path.glob("*zmax*.hdf"))
@@ -230,7 +226,7 @@ class MergedProductsManager:
                                 timestamps[dt] = []
                             timestamps[dt].append(str(hdf_file))
 
-                        except:
+                        except Exception:
                             continue  # Skip files that don't match expected format
 
         # Use unified storage for all sources including DWD
@@ -254,14 +250,14 @@ class MergedProductsManager:
                         timestamps[dt] = []
                     timestamps[dt].append(file_info["path"])
 
-                except:
+                except Exception:
                     continue  # Skip files that don't match expected format
 
         return timestamps
 
     def _find_timestamp_matches(
-        self, source_timestamps: Dict[str, Dict[datetime, List[str]]], min_sources: int
-    ) -> List[Tuple[datetime, Dict[str, List[str]]]]:
+        self, source_timestamps: dict[str, dict[datetime, list[str]]], min_sources: int
+    ) -> list[tuple[datetime, dict[str, list[str]]]]:
         """Find timestamps where multiple sources have data within tolerance"""
 
         tolerance = timedelta(minutes=self.merge_config["time_tolerance_minutes"])
@@ -292,12 +288,12 @@ class MergedProductsManager:
 
     def create_merged_products(
         self,
-        sources: Optional[List[str]] = None,
+        sources: list[str] | None = None,
         time_range_hours: int = 1,
-        strategies: Optional[List[str]] = None,
-        output_dir: Optional[Path] = None,
+        strategies: list[str] | None = None,
+        output_dir: Path | None = None,
         export_png: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create merged radar products for recent timestamps
 
@@ -384,15 +380,15 @@ class MergedProductsManager:
         success_count = len(results["processed_timestamps"])
         total_count = len(matches)
 
-        print(f"\\n🎉 Merged products creation complete!")
+        print("\\n🎉 Merged products creation complete!")
         print(f"✅ Processed: {success_count}/{total_count} timestamps")
         print(f"📄 Generated: {len(results['output_files'])} output files")
 
         return results
 
     def _load_timestamp_data(
-        self, timestamp: datetime, source_files: Dict[str, List[str]]
-    ) -> Dict[str, List[Dict[str, Any]]]:
+        self, timestamp: datetime, source_files: dict[str, list[str]]
+    ) -> dict[str, list[dict[str, Any]]]:
         """Load radar data for a timestamp from all sources"""
 
         timestamp_data = {}
@@ -428,10 +424,10 @@ class MergedProductsManager:
     def _create_single_merged_product(
         self,
         timestamp: datetime,
-        timestamp_data: Dict[str, List[Dict[str, Any]]],
-        source_data: Dict[str, Dict[str, Any]],
+        timestamp_data: dict[str, list[dict[str, Any]]],
+        source_data: dict[str, dict[str, Any]],
         strategy: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Create a single merged product for a timestamp"""
 
         try:
@@ -454,11 +450,11 @@ class MergedProductsManager:
 
     def _export_merged_png(
         self,
-        merged_data: Dict[str, Any],
+        merged_data: dict[str, Any],
         timestamp: datetime,
         strategy: str,
         output_dir: Path,
-    ) -> Optional[Path]:
+    ) -> Path | None:
         """Export merged data to PNG with hierarchical structure"""
 
         try:
@@ -489,9 +485,9 @@ class MergedProductsManager:
 
 
 def create_merged_products_cli(
-    sources: List[str],
+    sources: list[str],
     time_range_hours: int = 1,
-    strategies: List[str] = None,
+    strategies: list[str] = None,
     output_dir: str = "outputs/merged",
 ) -> int:
     """

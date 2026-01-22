@@ -11,10 +11,9 @@ import numpy as np
 
 matplotlib.use("Agg")  # Use non-interactive backend
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
-from matplotlib.colors import BoundaryNorm, ListedColormap
-from PIL import Image, ImageDraw
+from PIL import Image
 
 # Import SHMU colormap if available
 try:
@@ -107,13 +106,13 @@ class PNGExporter:
 
     def export_png(
         self,
-        radar_data: Dict[str, Any],
+        radar_data: dict[str, Any],
         output_path: Path,
-        extent: Dict[str, Any],
+        extent: dict[str, Any],
         colormap_type: str = "auto",
         dpi: int = 150,
         transparent_background: bool = True,
-    ) -> Tuple[Path, Dict[str, Any]]:
+    ) -> tuple[Path, dict[str, Any]]:
         """
         Export radar data as transparent PNG
 
@@ -165,7 +164,7 @@ class PNGExporter:
             cmap_copy.set_bad(alpha=0)  # Make NaN values transparent
             cmap_copy.set_under(alpha=0)  # Make below-threshold values transparent
 
-            im = ax.imshow(
+            ax.imshow(
                 data_masked,  # Use masked data
                 extent=tuple(plot_extent),
                 origin="upper",
@@ -230,12 +229,12 @@ class PNGExporter:
 
     def export_png_fast(
         self,
-        radar_data: Dict[str, Any],
+        radar_data: dict[str, Any],
         output_path: Path,
-        extent: Dict[str, Any],
+        extent: dict[str, Any],
         colormap_type: str = "auto",
         transparent_background: bool = True,
-    ) -> Tuple[Path, Dict[str, Any]]:
+    ) -> tuple[Path, dict[str, Any]]:
         """
         Fast PNG export using PIL (4-10x faster than matplotlib)
 
@@ -358,8 +357,8 @@ class PNGExporter:
             )
 
     def _select_colormap(
-        self, radar_data: Dict[str, Any], colormap_type: str
-    ) -> Dict[str, Any]:
+        self, radar_data: dict[str, Any], colormap_type: str
+    ) -> dict[str, Any]:
         """Select appropriate colormap for data - SHMU colormap is the single source"""
 
         if colormap_type != "auto":
@@ -399,7 +398,7 @@ class PNGExporter:
             return {"name": "reflectivity_shmu", **self.colormaps["reflectivity_shmu"]}
 
     def _get_plot_extent(
-        self, radar_data: Dict[str, Any], extent: Dict[str, Any]
+        self, radar_data: dict[str, Any], extent: dict[str, Any]
     ) -> list:
         """Get extent for matplotlib plot"""
 

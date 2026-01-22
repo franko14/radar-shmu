@@ -10,7 +10,6 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Tuple
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -169,8 +168,8 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def parse_time_range(
-    from_time: Optional[str], to_time: Optional[str], hours: Optional[int]
-) -> Tuple[datetime, datetime]:
+    from_time: str | None, to_time: str | None, hours: int | None
+) -> tuple[datetime, datetime]:
     """Parse time range from arguments"""
     import pytz
 
@@ -534,7 +533,7 @@ def fetch_command(args) -> int:
         try:
             if "source" in locals():
                 source.cleanup_temp_files()
-        except:
+        except Exception:
             pass
         return 1
 
