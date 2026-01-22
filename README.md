@@ -1,10 +1,10 @@
 # iMeteo Radar
 
-Multi-source weather radar data processor for Central Europe. Downloads, processes, and exports high-quality radar images from DWD (Germany), SHMU (Slovakia), and CHMI (Czech Republic).
+Multi-source weather radar data processor for Central Europe. Downloads, processes, and exports high-quality radar images from DWD (Germany), SHMU (Slovakia), CHMI (Czech Republic), OMSZ (Hungary), and ARSO (Slovenia).
 
 ## Features
 
-- **Three radar sources**: DWD, SHMU, CHMI with 5-minute updates
+- **Five radar sources**: DWD, SHMU, CHMI, OMSZ, ARSO with 5-minute updates
 - **Composite generation**: Merge multiple sources using maximum reflectivity
 - **PNG export**: Transparent backgrounds, official SHMU colorscale (-35 to 85 dBZ)
 - **Docker ready**: Pre-built image on DockerHub
@@ -15,15 +15,21 @@ Multi-source weather radar data processor for Central Europe. Downloads, process
 ### Python
 
 ```bash
-pip install -e .
+# Install in development mode
+pip install -e ".[dev]"
 
-# Fetch latest radar data
+# Fetch latest radar data from individual sources
 imeteo-radar fetch --source dwd
 imeteo-radar fetch --source shmu
 imeteo-radar fetch --source chmi
+imeteo-radar fetch --source omsz
+imeteo-radar fetch --source arso
 
-# Generate composite from all sources
+# Generate composite from all sources (default: dwd,shmu,chmi,omsz,arso)
 imeteo-radar composite
+
+# Generate composite with memory optimization (no individual PNGs)
+imeteo-radar composite --no-individual
 ```
 
 ### Docker
@@ -49,10 +55,25 @@ imeteo-radar fetch --source shmu --backload \
 imeteo-radar fetch --source dwd --output /data/radar/
 
 # Composite with specific sources
-imeteo-radar composite --sources dwd,shmu
+imeteo-radar composite --sources dwd,shmu,chmi
+
+# Composite with all 5 sources
+imeteo-radar composite --sources dwd,shmu,chmi,omsz,arso
+
+# Composite with custom resolution (default: 500m)
+imeteo-radar composite --resolution 250
+
+# Composite with timestamp tolerance (minutes between sources)
+imeteo-radar composite --timestamp-tolerance 5
+
+# Memory-optimized composite (skip individual source PNGs)
+imeteo-radar composite --no-individual
 
 # Generate extent metadata
 imeteo-radar extent --source all
+
+# Generate coverage mask
+imeteo-radar coverage-mask --output /tmp/coverage/
 ```
 
 ## Output
@@ -63,6 +84,8 @@ imeteo-radar extent --source all
   - `/tmp/germany/` (DWD)
   - `/tmp/slovakia/` (SHMU)
   - `/tmp/czechia/` (CHMI)
+  - `/tmp/hungary/` (OMSZ)
+  - `/tmp/slovenia/` (ARSO)
   - `/tmp/composite/` (merged)
 
 ## Data Sources
@@ -72,6 +95,8 @@ imeteo-radar extent --source all
 | DWD | dmax | Germany | ~1 km |
 | SHMU | zmax | Slovakia | ~400 m |
 | CHMI | maxz | Czech Republic | ~500 m |
+| OMSZ | cmax | Hungary | ~500 m |
+| ARSO | zm | Slovenia | ~500 m |
 
 ## Documentation
 
@@ -86,7 +111,7 @@ imeteo-radar extent --source all
 ## Requirements
 
 - Python 3.9+ (or Docker)
-- Dependencies: numpy, h5py, matplotlib, requests, PIL, opencv-python
+- Dependencies: numpy, scipy, h5py, pyproj, matplotlib, requests, PIL, opencv-python
 
 ## License
 
