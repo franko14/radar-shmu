@@ -14,6 +14,7 @@ from .processing.merger import RadarMerger
 from .sources.arso import ARSORadarSource
 from .sources.chmi import CHMIRadarSource
 from .sources.dwd import DWDRadarSource
+from .sources.imgw import IMGWRadarSource
 from .sources.omsz import OMSZRadarSource
 
 # Main exports
@@ -25,6 +26,7 @@ __all__ = [
     "CHMIRadarSource",
     "ARSORadarSource",
     "OMSZRadarSource",
+    "IMGWRadarSource",
     "RadarMerger",
     "PNGExporter",
     "RadarAnimator",

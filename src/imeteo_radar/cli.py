@@ -26,9 +26,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     fetch_parser.add_argument(
         "--source",
-        choices=["dwd", "shmu", "chmi", "arso", "omsz"],
+        choices=["dwd", "shmu", "chmi", "arso", "omsz", "imgw"],
         default="dwd",
-        help="Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary)",
+        help="Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary, IMGW for Poland)",
     )
     fetch_parser.add_argument(
         "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
@@ -66,7 +66,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     extent_parser.add_argument(
         "--source",
-        choices=["dwd", "shmu", "chmi", "arso", "omsz", "all"],
+        choices=["dwd", "shmu", "chmi", "arso", "omsz", "imgw", "all"],
         default="all",
         help="Radar source(s) to generate extent for",
     )
@@ -81,8 +81,8 @@ def create_parser() -> argparse.ArgumentParser:
     composite_parser.add_argument(
         "--sources",
         type=str,
-        default="dwd,shmu,chmi,omsz,arso",
-        help="Comma-separated list of sources to merge (default: dwd,shmu,chmi,omsz,arso)",
+        default="dwd,shmu,chmi,omsz,arso,imgw",
+        help="Comma-separated list of sources to merge (default: dwd,shmu,chmi,omsz,arso,imgw)",
     )
     composite_parser.add_argument(
         "--output",
@@ -142,7 +142,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     coverage_parser.add_argument(
         "--source",
-        choices=["dwd", "shmu", "chmi", "arso", "omsz", "all"],
+        choices=["dwd", "shmu", "chmi", "arso", "omsz", "imgw", "all"],
         default="all",
         help="Radar source to generate mask for (default: all)",
     )
