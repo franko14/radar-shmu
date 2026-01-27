@@ -12,6 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class TimePartitionedStorage:
     """Time-based partitioned storage for radar data"""
@@ -327,13 +331,19 @@ class TimePartitionedStorage:
 
                 # Store in partitioned structure
                 stored_path = self.store_file(file_path, timestamp, source, product)
-                print(f"✅ Migrated: {file_path.name} -> {stored_path}")
+                logger.info(
+                    f"Migrated: {file_path.name} -> {stored_path}",
+                    extra={"source": source, "operation": "migrate"},
+                )
                 migrated_count += 1
 
             except Exception as e:
-                print(f"❌ Failed to migrate {file_path.name}: {e}")
+                logger.error(f"Failed to migrate {file_path.name}: {e}")
 
-        print(f"📦 Migrated {migrated_count} files from {old_cache_dir}")
+        logger.info(
+            f"Migrated {migrated_count} files from {old_cache_dir}",
+            extra={"count": migrated_count},
+        )
 
     def _extract_timestamp_from_filename(self, filename: str) -> str | None:
         """Extract timestamp from filename"""

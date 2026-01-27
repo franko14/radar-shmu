@@ -11,6 +11,9 @@ import cv2
 import numpy as np
 
 from ..core.base import lonlat_to_mercator
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class RadarMerger:
@@ -45,10 +48,10 @@ class RadarMerger:
         """
 
         if len(timestamp_data) < 2:
-            print("⚠️  Need at least 2 sources to merge")
+            logger.warning("Need at least 2 sources to merge")
             return None
 
-        print(f"🔀 Merging {len(timestamp_data)} sources using '{strategy}' strategy")
+        logger.info(f"Merging {len(timestamp_data)} sources using '{strategy}' strategy")
 
         try:
             # Determine target grid and extent
@@ -56,13 +59,13 @@ class RadarMerger:
                 source_data, target_resolution
             )
 
-            print(f"🎯 Target extent: {target_extent['wgs84']}")
-            print(f"📐 Target shape: {target_shape}")
+            logger.debug(f"Target extent: {target_extent['wgs84']}")
+            logger.debug(f"Target shape: {target_shape}")
 
             # Regrid all sources to target grid
             regridded_data = {}
             for source_name, files in timestamp_data.items():
-                print(f"📊 Regridding {source_name} data...")
+                logger.info(f"Regridding {source_name} data...", extra={"source": source_name})
 
                 # For now, use first file from each source (TODO: handle multiple products)
                 file_data = files[0] if files else None
@@ -77,7 +80,7 @@ class RadarMerger:
                     regridded_data[source_name] = regridded
 
             if len(regridded_data) < 2:
-                print("❌ Failed to regrid enough sources for merging")
+                logger.error("Failed to regrid enough sources for merging")
                 return None
 
             # Store target coordinates for weighted merge
@@ -117,7 +120,7 @@ class RadarMerger:
             }
 
         except Exception as e:
-            print(f"❌ Merge failed: {e}")
+            logger.error(f"Merge failed: {e}")
             return None
 
     def _compute_target_grid(
@@ -198,7 +201,7 @@ class RadarMerger:
             )
 
         except Exception as e:
-            print(f"❌ Regridding failed: {e}")
+            logger.error(f"Regridding failed: {e}")
             return None
 
     def _regrid_data_fast(
@@ -210,12 +213,12 @@ class RadarMerger:
     ) -> np.ndarray | None:
         """Fast regridding using OpenCV remap (8-15x faster than scipy)"""
         try:
-            print(f"🚀 Fast regridding: {source_data.shape} → {target_shape}")
+            logger.info(f"Fast regridding: {source_data.shape} → {target_shape}")
 
             # Handle invalid data
             valid_mask = np.isfinite(source_data)
             if not np.any(valid_mask):
-                print("⚠️  No valid data to regrid")
+                logger.warning("No valid data to regrid")
                 return None
 
             # Get coordinate arrays
@@ -322,17 +325,17 @@ class RadarMerger:
             # Additional quality control - clip to valid meteorological range
             interpolated = np.clip(interpolated, -35, 85)
 
-            print(
-                f"✅ Fast regridded to shape {target_shape}, "
+            logger.info(
+                f"Fast regridded to shape {target_shape}, "
                 f"valid pixels: {np.sum(np.isfinite(interpolated))}"
             )
 
             return interpolated.astype(np.float64)  # Convert back to expected dtype
 
         except Exception as e:
-            print(f"❌ Fast regridding failed: {e}")
+            logger.error(f"Fast regridding failed: {e}")
             # Fallback to scipy method
-            print("📉 Falling back to scipy interpolation...")
+            logger.info("Falling back to scipy interpolation...")
             return self._regrid_data(
                 source_data, source_coords, target_extent, target_shape
             )
@@ -340,7 +343,7 @@ class RadarMerger:
     def _average_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Improved average merge strategy with quality control and range clipping"""
 
-        print("📊 Applying average merge strategy")
+        logger.info("Applying average merge strategy")
 
         # Stack all arrays
         arrays = list(regridded_data.values())
@@ -381,17 +384,17 @@ class RadarMerger:
         merged[extreme_mask] = np.nan
 
         valid_pixels = np.sum(~np.isnan(merged))
-        print(f"✅ Average merge: {valid_pixels} valid pixels")
+        logger.info(f"Average merge: {valid_pixels} valid pixels")
 
         return merged
 
     def _priority_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Priority merge - use first source, fill gaps with others"""
 
-        print("🎯 Applying priority merge strategy")
+        logger.info("Applying priority merge strategy")
 
         sources = list(regridded_data.keys())
-        print(f"📋 Priority order: {' > '.join(sources)}")
+        logger.debug(f"Priority order: {' > '.join(sources)}")
 
         # Start with first source
         merged = regridded_data[sources[0]].copy()
@@ -402,14 +405,14 @@ class RadarMerger:
             merged[mask] = regridded_data[source][mask]
 
         valid_pixels = np.sum(~np.isnan(merged))
-        print(f"✅ Priority merge: {valid_pixels} valid pixels")
+        logger.info(f"Priority merge: {valid_pixels} valid pixels")
 
         return merged
 
     def _weighted_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Weighted merge based on distance from radar centers and data quality"""
 
-        print("⚖️  Applying weighted merge strategy")
+        logger.info("Applying weighted merge strategy")
 
         # Radar center coordinates (approximate)
         radar_centers = {
@@ -502,14 +505,14 @@ class RadarMerger:
         merged[isolated_mask] = np.nan
 
         valid_pixels = np.sum(~np.isnan(merged))
-        print(f"✅ Weighted merge: {valid_pixels} valid pixels")
+        logger.info(f"Weighted merge: {valid_pixels} valid pixels")
 
         return merged
 
     def _max_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Maximum value merge - take highest reflectivity"""
 
-        print("📈 Applying maximum merge strategy")
+        logger.info("Applying maximum merge strategy")
 
         # Stack all arrays
         arrays = list(regridded_data.values())
@@ -520,7 +523,7 @@ class RadarMerger:
             merged = np.nanmax(stacked, axis=0)
 
         valid_pixels = np.sum(~np.isnan(merged))
-        print(f"✅ Maximum merge: {valid_pixels} valid pixels")
+        logger.info(f"Maximum merge: {valid_pixels} valid pixels")
 
         return merged
 
@@ -535,8 +538,8 @@ class RadarMerger:
         try:
             from scipy.interpolate import RegularGridInterpolator
 
-            print(
-                f"📉 Using scipy interpolation fallback: {source_data.shape} → {target_shape}"
+            logger.info(
+                f"Using scipy interpolation fallback: {source_data.shape} → {target_shape}"
             )
 
             # Get coordinate arrays
@@ -574,14 +577,14 @@ class RadarMerger:
             # Interpolate
             interpolated = interpolator(target_points).reshape(target_shape)
 
-            print(
-                f"✅ Scipy interpolation complete, valid pixels: {np.sum(np.isfinite(interpolated))}"
+            logger.info(
+                f"Scipy interpolation complete, valid pixels: {np.sum(np.isfinite(interpolated))}"
             )
             return interpolated
 
         except ImportError:
-            print("❌ Scipy not available for fallback interpolation")
+            logger.error("Scipy not available for fallback interpolation")
             return None
         except Exception as e:
-            print(f"❌ Scipy interpolation failed: {e}")
+            logger.error(f"Scipy interpolation failed: {e}")
             return None

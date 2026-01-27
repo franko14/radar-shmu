@@ -9,6 +9,10 @@ from typing import Any
 
 import numpy as np
 
+from .logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class RadarSource(ABC):
     """Abstract base class for radar data sources"""
@@ -127,10 +131,13 @@ class RadarSource(ABC):
                     cleaned_count += 1
                 del self.temp_files[cache_key]
             except Exception as e:
-                print(f"⚠️  Could not delete temp file {file_path}: {e}")
+                logger.warning(f"Could not delete temp file {file_path}: {e}")
 
         if cleaned_count > 0:
-            print(f"🧹 Cleaned up {cleaned_count} temporary {self.name.upper()} files")
+            logger.debug(
+                f"Cleaned up {cleaned_count} temporary {self.name.upper()} files",
+                extra={"source": self.name, "count": cleaned_count},
+            )
         return cleaned_count
 
 

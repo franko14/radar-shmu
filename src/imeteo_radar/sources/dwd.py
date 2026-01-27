@@ -16,8 +16,14 @@ import h5py
 import numpy as np
 import requests
 
+from ..core.alerts import get_alert_manager
 from ..core.base import RadarSource, lonlat_to_mercator
+from ..core.logging import get_logger
 from ..core.projection import projection_handler
+from ..core.retry import retry_with_backoff
+
+logger = get_logger(__name__)
+alert_manager = get_alert_manager()
 
 
 class DWDRadarSource(RadarSource):
@@ -74,34 +80,38 @@ class DWDRadarSource(RadarSource):
             }
         return super().get_product_metadata(product)
 
+    @retry_with_backoff(
+        max_retries=2,
+        base_delay=1.0,
+        exceptions=(requests.RequestException,),
+        on_retry=lambda attempt, delay, e: logger.warning(
+            f"DWD directory listing retry {attempt}/2 after {delay:.1f}s: {e}"
+        ),
+    )
     def _get_available_timestamps_from_server(self, product: str) -> list[str]:
         """Get actually available timestamps by parsing DWD directory listing"""
 
         directory_url = f"{self.base_url}/{product}/"
-        try:
-            print(f"🌐 Fetching DWD directory: {directory_url}")
-            response = requests.get(directory_url, timeout=15)
-            response.raise_for_status()
+        logger.debug(f"Fetching DWD directory: {directory_url}")
+        response = requests.get(directory_url, timeout=15)
+        response.raise_for_status()
 
-            # Parse HTML directory listing to extract timestamps
-            import re
+        # Parse HTML directory listing to extract timestamps
+        import re
 
-            pattern = rf"composite_{product}_(\d{{8}}_\d{{4}})-hd5"
-            matches = re.findall(pattern, response.text)
+        pattern = rf"composite_{product}_(\d{{8}}_\d{{4}})-hd5"
+        matches = re.findall(pattern, response.text)
 
-            if matches:
-                # Sort by timestamp (newest first)
-                timestamps = sorted(set(matches), reverse=True)
-                print(
-                    f"✅ Found {len(timestamps)} available timestamps: {timestamps[:3]}..."
-                )
-                return timestamps
-            else:
-                print("❌ No timestamp patterns found in directory listing")
-                return []
-
-        except Exception as e:
-            print(f"⚠️  Could not parse directory listing: {e}")
+        if matches:
+            # Sort by timestamp (newest first)
+            timestamps = sorted(set(matches), reverse=True)
+            logger.debug(
+                f"Found {len(timestamps)} available timestamps: {timestamps[:3]}..."
+            )
+            alert_manager.record_success("dwd")
+            return timestamps
+        else:
+            logger.warning("No timestamp patterns found in DWD directory listing")
             return []
 
     def _filter_timestamps_by_range(
@@ -166,6 +176,11 @@ class DWDRadarSource(RadarSource):
 
         return timestamps
 
+    @retry_with_backoff(
+        max_retries=2,
+        base_delay=0.5,
+        exceptions=(requests.RequestException,),
+    )
     def _check_timestamp_availability(self, timestamp: str, product: str) -> bool:
         """Check if DWD data is available with robust error handling"""
         url = self._get_product_url(timestamp, product)
@@ -175,16 +190,13 @@ class DWDRadarSource(RadarSource):
             response = requests.head(url, timeout=10)
             if response.status_code == 200:
                 return True
-        except Exception:
+        except requests.RequestException:
             pass
 
         # Fallback to GET request with range header to minimize data transfer
-        try:
-            headers = {"Range": "bytes=0-1024"}  # Just get first 1KB
-            response = requests.get(url, headers=headers, timeout=10)
-            return response.status_code in [200, 206]  # 206 = Partial Content
-        except Exception:
-            return False
+        headers = {"Range": "bytes=0-1024"}  # Just get first 1KB
+        response = requests.get(url, headers=headers, timeout=10)
+        return response.status_code in [200, 206]  # 206 = Partial Content
 
     def _get_product_url(self, timestamp: str, product: str) -> str:
         """Generate URL for DWD product"""
@@ -209,85 +221,99 @@ class DWDRadarSource(RadarSource):
             }
 
         try:
-            url = self._get_product_url(timestamp, product)
-            # Download to temporary file
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-
-            # Create a proper temporary file
-            with tempfile.NamedTemporaryFile(
-                suffix=f"_dwd_{product}_{timestamp}.hdf", delete=False
-            ) as temp_file:
-                temp_file.write(response.content)
-                temp_path = Path(temp_file.name)
-
-            # Handle LATEST timestamp specially - extract actual timestamp from HDF5 file
-            if timestamp == "LATEST":
-                # Extract actual timestamp from the downloaded HDF5 file
-                try:
-                    with h5py.File(temp_path, "r") as f:
-                        # Try to get timestamp from ODIM_H5 metadata
-                        if (
-                            "what" in f
-                            and "date" in f["what"].attrs
-                            and "time" in f["what"].attrs
-                        ):
-                            date_str = f["what"].attrs["date"]
-                            time_str = f["what"].attrs["time"]
-                            if isinstance(date_str, bytes):
-                                date_str = date_str.decode("utf-8")
-                            if isinstance(time_str, bytes):
-                                time_str = time_str.decode("utf-8")
-                            # Convert YYYYMMDD and HHMMSS to our format
-                            normalized_timestamp = f"{date_str}{time_str[:4]}00"
-                        else:
-                            # Fallback to current time if metadata not found
-                            normalized_timestamp = datetime.now().strftime(
-                                "%Y%m%d%H%M00"
-                            )
-                except Exception as e:
-                    print(f"⚠️  Could not extract timestamp from LATEST file: {e}")
-                    normalized_timestamp = datetime.now().strftime("%Y%m%d%H%M00")
-            else:
-                normalized_timestamp = (
-                    timestamp.replace("_", "") + "00"
-                )  # Convert to YYYYMMDDHHMM00 (14-digit)
-
-            # Check if we already have this file in current session
-            cache_key = f"{product}_{normalized_timestamp}"
-            if cache_key in self.temp_files and os.path.exists(
-                self.temp_files[cache_key]
-            ):
-                # File already downloaded in this session
-                temp_path.unlink()  # Remove the duplicate
-                return {
-                    "timestamp": normalized_timestamp,
-                    "product": product,
-                    "path": self.temp_files[cache_key],
-                    "url": url,
-                    "cached": True,
-                    "success": True,
-                }
-
-            # Store temp file path for this session
-            self.temp_files[cache_key] = str(temp_path)
-
-            return {
-                "timestamp": normalized_timestamp,
-                "product": product,
-                "path": str(temp_path),
-                "url": url,
-                "cached": False,
-                "success": True,
-            }
-
+            result = self._download_single_file_with_retry(timestamp, product)
+            alert_manager.record_success("dwd")
+            return result
         except Exception as e:
+            alert_manager.record_failure("dwd", str(e))
+            logger.warning(f"DWD download failed for {timestamp}: {e}")
             return {
                 "error": str(e),
                 "timestamp": timestamp,
                 "product": product,
                 "success": False,
             }
+
+    @retry_with_backoff(
+        max_retries=3,
+        base_delay=1.0,
+        max_delay=10.0,
+        exceptions=(requests.RequestException,),
+        on_retry=lambda attempt, delay, e: logger.warning(
+            f"DWD download retry {attempt}/3 after {delay:.1f}s: {e}"
+        ),
+    )
+    def _download_single_file_with_retry(
+        self, timestamp: str, product: str
+    ) -> dict[str, Any]:
+        """Download a single DWD radar file with retry logic"""
+        url = self._get_product_url(timestamp, product)
+        # Download to temporary file
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+
+        # Create a proper temporary file
+        with tempfile.NamedTemporaryFile(
+            suffix=f"_dwd_{product}_{timestamp}.hdf", delete=False
+        ) as temp_file:
+            temp_file.write(response.content)
+            temp_path = Path(temp_file.name)
+
+        # Handle LATEST timestamp specially - extract actual timestamp from HDF5 file
+        if timestamp == "LATEST":
+            # Extract actual timestamp from the downloaded HDF5 file
+            try:
+                with h5py.File(temp_path, "r") as f:
+                    # Try to get timestamp from ODIM_H5 metadata
+                    if (
+                        "what" in f
+                        and "date" in f["what"].attrs
+                        and "time" in f["what"].attrs
+                    ):
+                        date_str = f["what"].attrs["date"]
+                        time_str = f["what"].attrs["time"]
+                        if isinstance(date_str, bytes):
+                            date_str = date_str.decode("utf-8")
+                        if isinstance(time_str, bytes):
+                            time_str = time_str.decode("utf-8")
+                        # Convert YYYYMMDD and HHMMSS to our format
+                        normalized_timestamp = f"{date_str}{time_str[:4]}00"
+                    else:
+                        # Fallback to current time if metadata not found
+                        normalized_timestamp = datetime.now().strftime("%Y%m%d%H%M00")
+            except Exception as e:
+                logger.warning(f"Could not extract timestamp from LATEST file: {e}")
+                normalized_timestamp = datetime.now().strftime("%Y%m%d%H%M00")
+        else:
+            normalized_timestamp = (
+                timestamp.replace("_", "") + "00"
+            )  # Convert to YYYYMMDDHHMM00 (14-digit)
+
+        # Check if we already have this file in current session
+        cache_key = f"{product}_{normalized_timestamp}"
+        if cache_key in self.temp_files and os.path.exists(self.temp_files[cache_key]):
+            # File already downloaded in this session
+            temp_path.unlink()  # Remove the duplicate
+            return {
+                "timestamp": normalized_timestamp,
+                "product": product,
+                "path": self.temp_files[cache_key],
+                "url": url,
+                "cached": True,
+                "success": True,
+            }
+
+        # Store temp file path for this session
+        self.temp_files[cache_key] = str(temp_path)
+
+        return {
+            "timestamp": normalized_timestamp,
+            "product": product,
+            "path": str(temp_path),
+            "url": url,
+            "cached": False,
+            "success": True,
+        }
 
     def download_latest(
         self,
@@ -312,20 +338,20 @@ class DWDRadarSource(RadarSource):
 
         # If only fetching one file and use_latest is True, use LATEST endpoint
         if count == 1 and use_latest and not start_time and not end_time:
-            print("📡 Using LATEST endpoint for most recent data...")
+            logger.info("Using LATEST endpoint for most recent data...")
             downloaded_files = []
             for product in products:
                 result = self._download_single_file("LATEST", product)
                 if result["success"]:
                     downloaded_files.append(result)
-                    print(f"✅ Downloaded latest {product} data")
+                    logger.info(f"Downloaded latest {product} data")
                 else:
-                    print(
-                        f"❌ Failed to download latest {product}: {result.get('error', 'Unknown error')}"
+                    logger.error(
+                        f"Failed to download latest {product}: {result.get('error', 'Unknown error')}"
                     )
             return downloaded_files
 
-        print(f"🔍 Finding last {count} available DWD timestamps...")
+        logger.info(f"Finding last {count} available DWD timestamps...")
 
         # Strategy 1: Try parsing directory listing first (most reliable)
         available_timestamps = []
@@ -338,17 +364,17 @@ class DWDRadarSource(RadarSource):
                         server_timestamps, start_time, end_time
                     )
                     available_timestamps = filtered_timestamps[:count]
-                    print(
-                        f"✅ Using server directory listing (filtered {len(server_timestamps)} → {len(filtered_timestamps)} timestamps)"
+                    logger.debug(
+                        f"Using server directory listing (filtered {len(server_timestamps)} -> {len(filtered_timestamps)} timestamps)"
                     )
                 else:
                     available_timestamps = server_timestamps[:count]
-                    print("✅ Using server directory listing")
+                    logger.debug("Using server directory listing")
                 break  # Use first working product for timestamp discovery
 
         # Strategy 2: Fallback to generated timestamps if directory parsing fails
         if not available_timestamps:
-            print("📡 Fallback to timestamp generation...")
+            logger.info("Fallback to timestamp generation...")
             test_timestamps = self._generate_timestamps(
                 count * 4
             )  # Generate more candidates
@@ -359,17 +385,17 @@ class DWDRadarSource(RadarSource):
 
                 if self._check_timestamp_availability(timestamp, "dmax"):
                     available_timestamps.append(timestamp)
-                    print(f"✅ Found: {timestamp}")
+                    logger.debug(f"Found: {timestamp}")
 
         # Remove duplicates and limit to requested count
         available_timestamps = list(dict.fromkeys(available_timestamps))[:count]
 
         if not available_timestamps:
-            print("❌ No available DWD timestamps found")
+            logger.error("No available DWD timestamps found")
             return []
 
-        print(
-            f"📥 Downloading {len(available_timestamps)} timestamps × {len(products)} products..."
+        logger.info(
+            f"Downloading {len(available_timestamps)} timestamps x {len(products)} products..."
         )
 
         # Create download tasks
@@ -378,8 +404,8 @@ class DWDRadarSource(RadarSource):
             for product in products:
                 download_tasks.append((timestamp, product))
 
-        print(
-            f"📥 Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)..."
+        logger.debug(
+            f"Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)..."
         )
 
         # Execute downloads in parallel
@@ -402,18 +428,19 @@ class DWDRadarSource(RadarSource):
                     if result["success"]:
                         downloaded_files.append(result)
                         if result["cached"]:
-                            print(f"📁 Using cached: {product} {timestamp}")
+                            logger.debug(f"Using cached: {product} {timestamp}")
                         else:
-                            print(f"✅ Downloaded: {product} {timestamp}")
+                            logger.debug(f"Downloaded: {product} {timestamp}")
                     else:
-                        print(
-                            f"❌ Failed {product} {timestamp}: {result.get('error', 'Unknown error')}"
+                        logger.warning(
+                            f"Failed {product} {timestamp}: {result.get('error', 'Unknown error')}"
                         )
                 except Exception as e:
-                    print(f"❌ Exception {product} {timestamp}: {e}")
+                    logger.warning(f"Exception {product} {timestamp}: {e}")
 
-        print(
-            f"📋 DWD: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)"
+        logger.info(
+            f"DWD: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)",
+            extra={"source": "dwd", "count": len(downloaded_files)},
         )
         return downloaded_files
 
@@ -425,8 +452,8 @@ class DWDRadarSource(RadarSource):
                 # DWD files might have different structure than SHMU
                 # Need to explore the file structure first
 
-                print(f"🔍 Analyzing DWD file structure: {file_path}")
-                self._print_hdf5_structure(f)
+                logger.debug(f"Analyzing DWD file structure: {file_path}")
+                self._log_hdf5_structure(f)
 
                 # Try to find the main dataset
                 data = None
@@ -441,7 +468,7 @@ class DWDRadarSource(RadarSource):
                 for path in main_dataset_paths:
                     try:
                         data = f[path][:]
-                        print(f"✅ Found data at: {path}")
+                        logger.debug(f"Found data at: {path}")
                         break
                     except KeyError:
                         continue
@@ -466,8 +493,8 @@ class DWDRadarSource(RadarSource):
                 nodata = data_what_attrs.get("nodata", 65535)
                 undetect = data_what_attrs.get("undetect", 0)
 
-                print(
-                    f"📊 DWD scaling - gain: {gain}, offset: {offset}, nodata: {nodata}, undetect: {undetect}"
+                logger.debug(
+                    f"DWD scaling - gain: {gain}, offset: {offset}, nodata: {nodata}, undetect: {undetect}"
                 )
 
                 # Apply proper scaling like SHMU does: gain * data + offset
@@ -477,8 +504,8 @@ class DWDRadarSource(RadarSource):
                 scaled_data[data == nodata] = np.nan
                 scaled_data[data == undetect] = np.nan
 
-                print(
-                    f"✅ Scaled data range: {np.nanmin(scaled_data):.2f} to {np.nanmax(scaled_data):.2f}"
+                logger.debug(
+                    f"Scaled data range: {np.nanmin(scaled_data):.2f} to {np.nanmax(scaled_data):.2f}"
                 )
 
                 # Get geographic information from where attributes
@@ -501,10 +528,10 @@ class DWDRadarSource(RadarSource):
                     if isinstance(proj_def, bytes):
                         proj_def = proj_def.decode("utf-8")
 
-                    print(f"🗺️ DWD projection: {proj_def}")
+                    logger.debug(f"DWD projection: {proj_def}")
                 except Exception:
-                    print(
-                        "⚠️ No projection definition found - using corner approximation"
+                    logger.warning(
+                        "No projection definition found - using corner approximation"
                     )
 
                 # MEMORY OPTIMIZATION: Calculate extent from corners only (no meshgrids!)
@@ -514,13 +541,13 @@ class DWDRadarSource(RadarSource):
                     extent_bounds = projection_handler.calculate_dwd_extent(
                         where_attrs, proj_def
                     )
-                    print(
-                        f"📊 DWD bounds: W={extent_bounds['west']:.2f}, E={extent_bounds['east']:.2f}, "
+                    logger.debug(
+                        f"DWD bounds: W={extent_bounds['west']:.2f}, E={extent_bounds['east']:.2f}, "
                         f"N={extent_bounds['north']:.2f}, S={extent_bounds['south']:.2f}"
                     )
 
                 except Exception as e:
-                    print(f"⚠️ Extent calculation failed: {e}")
+                    logger.warning(f"Extent calculation failed: {e}")
                     # Fallback to default bounds
                     extent_bounds = {
                         "west": 3.0,
@@ -628,22 +655,22 @@ class DWDRadarSource(RadarSource):
             "resolution_m": [1000, 1000],  # 1km resolution
         }
 
-    def _print_hdf5_structure(self, hdf_file, level=0, max_items=10):
-        """Helper method to print HDF5 file structure for debugging"""
+    def _log_hdf5_structure(self, hdf_file, level=0, max_items=10):
+        """Helper method to log HDF5 file structure for debugging"""
         try:
             items = list(hdf_file.items())[:max_items]
             for key, value in items:
                 indent = "  " * level
                 if hasattr(value, "keys"):  # It's a group
-                    print(f"{indent}{key}/ (group)")
+                    logger.debug(f"{indent}{key}/ (group)")
                     if level < 2:  # Limit depth to avoid spam
-                        self._print_hdf5_structure(value, level + 1, max_items)
+                        self._log_hdf5_structure(value, level + 1, max_items)
                 else:  # It's a dataset
-                    print(
+                    logger.debug(
                         f"{indent}{key} (dataset): shape={getattr(value, 'shape', '?')}"
                     )
         except Exception as e:
-            print(f"  Error printing structure: {e}")
+            logger.debug(f"  Error logging structure: {e}")
 
     def extract_extent_only(self, file_path: str) -> dict[str, Any]:
         """Extract extent from DWD HDF5 without loading data array.

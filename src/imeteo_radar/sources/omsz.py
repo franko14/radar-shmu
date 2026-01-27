@@ -18,6 +18,9 @@ import numpy as np
 import requests
 
 from ..core.base import RadarSource, lonlat_to_mercator
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class OMSZRadarSource(RadarSource):
@@ -271,8 +274,8 @@ class OMSZRadarSource(RadarSource):
         if products is None:
             products = ["cmax"]  # Default to ZMAX equivalent
 
-        print(f"[OMSZ] Finding last {count} available timestamps...")
-        print("[OMSZ] Checking server for current timestamps...")
+        logger.info(f"Finding last {count} available timestamps...", extra={"source": "omsz"})
+        logger.info("Checking server for current timestamps...", extra={"source": "omsz"})
 
         # Generate more timestamps if we're filtering by time range
         multiplier = 8 if (start_time and end_time) else 4
@@ -283,10 +286,11 @@ class OMSZRadarSource(RadarSource):
             test_timestamps = self._filter_timestamps_by_range(
                 test_timestamps, start_time, end_time
             )
-            print(
-                f"[OMSZ] Filtered timestamps to range: "
+            logger.info(
+                f"Filtered timestamps to range: "
                 f"{start_time.strftime('%Y-%m-%d %H:%M')} to "
-                f"{end_time.strftime('%Y-%m-%d %H:%M')}"
+                f"{end_time.strftime('%Y-%m-%d %H:%M')}",
+                extra={"source": "omsz"},
             )
 
         available_timestamps = []
@@ -298,15 +302,16 @@ class OMSZRadarSource(RadarSource):
             # Test with cmax (most reliable product)
             if self._check_timestamp_availability(timestamp, "cmax"):
                 available_timestamps.append(timestamp)
-                print(f"[OMSZ] Found: {timestamp}")
+                logger.info(f"Found: {timestamp}", extra={"source": "omsz"})
 
         if not available_timestamps:
-            print("[OMSZ] No available timestamps found")
+            logger.warning("No available timestamps found", extra={"source": "omsz"})
             return []
 
-        print(
-            f"[OMSZ] Downloading {len(available_timestamps)} timestamps "
-            f"x {len(products)} products..."
+        logger.info(
+            f"Downloading {len(available_timestamps)} timestamps "
+            f"x {len(products)} products...",
+            extra={"source": "omsz"},
         )
 
         # Create download tasks
@@ -315,9 +320,10 @@ class OMSZRadarSource(RadarSource):
             for product in products:
                 download_tasks.append((timestamp, product))
 
-        print(
-            f"[OMSZ] Starting parallel downloads "
-            f"({len(download_tasks)} files, max 6 concurrent)..."
+        logger.info(
+            f"Starting parallel downloads "
+            f"({len(download_tasks)} files, max 6 concurrent)...",
+            extra={"source": "omsz"},
         )
 
         # Execute downloads in parallel
@@ -338,20 +344,21 @@ class OMSZRadarSource(RadarSource):
                     if result["success"]:
                         downloaded_files.append(result)
                         if result["cached"]:
-                            print(f"[OMSZ] Using cached: {product} {timestamp}")
+                            logger.debug(f"Using cached: {product} {timestamp}", extra={"source": "omsz"})
                         else:
-                            print(f"[OMSZ] Downloaded: {product} {timestamp}")
+                            logger.info(f"Downloaded: {product} {timestamp}", extra={"source": "omsz"})
                     else:
-                        print(
-                            f"[OMSZ] Failed {product} {timestamp}: "
-                            f"{result.get('error', 'Unknown error')}"
+                        logger.error(
+                            f"Failed {product} {timestamp}: "
+                            f"{result.get('error', 'Unknown error')}",
+                            extra={"source": "omsz"},
                         )
                 except Exception as e:
-                    print(f"[OMSZ] Exception {product} {timestamp}: {e}")
+                    logger.error(f"Exception {product} {timestamp}: {e}", extra={"source": "omsz"})
 
         success_count = len(downloaded_files)
         fail_count = len(download_tasks) - success_count
-        print(f"[OMSZ] Downloaded {success_count} files ({fail_count} failed)")
+        logger.info(f"OMSZ: Downloaded {success_count} files ({fail_count} failed)", extra={"source": "omsz", "count": success_count})
 
         return downloaded_files
 
@@ -560,8 +567,8 @@ class OMSZRadarSource(RadarSource):
                     cleaned_count += 1
                 del self.temp_files[cache_key]
             except Exception as e:
-                print(f"⚠️  Could not delete temp file {file_path}: {e}")
+                logger.warning(f"Could not delete temp file {file_path}: {e}", extra={"source": "omsz"})
 
         if cleaned_count > 0:
-            print(f"🧹 Cleaned up {cleaned_count} temporary OMSZ files")
+            logger.debug(f"Cleaned up {cleaned_count} temporary OMSZ files", extra={"source": "omsz", "count": cleaned_count})
         return cleaned_count

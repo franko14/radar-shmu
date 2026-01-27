@@ -17,6 +17,10 @@ Usage:
 
 import matplotlib.colors as mcolors
 
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_shmu_colormap():
     """
@@ -146,20 +150,19 @@ def get_color_for_dbz(dbz_value):
 create_discrete_colormap = get_shmu_colormap
 
 if __name__ == "__main__":
-    print("SHMU Official Radar Colormap")
-    print("=" * 30)
+    logger.info("SHMU Official Radar Colormap")
 
     cmap, norm = get_shmu_colormap()
     min_dbz, max_dbz = get_dbz_range()
 
-    print(f"dBZ range: {min_dbz} to {max_dbz}")
-    print(f"Number of discrete colors: {cmap.N}")
-    print(f"Colormap name: {cmap.name}")
+    logger.info(f"dBZ range: {min_dbz} to {max_dbz}")
+    logger.info(f"Number of discrete colors: {cmap.N}")
+    logger.info(f"Colormap name: {cmap.name}")
 
     # Show sample colors
-    print("\nSample colors:")
+    logger.info("Sample colors:")
     test_values = [-35, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70, 85]
     for dbz in test_values:
         color = get_color_for_dbz(dbz)
         rgb_255 = tuple(int(c * 255) for c in color[:3])
-        print(f"  {dbz:3d} dBZ: RGB{rgb_255}")
+        logger.info(f"  {dbz:3d} dBZ: RGB{rgb_255}")

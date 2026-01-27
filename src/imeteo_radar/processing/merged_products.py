@@ -11,11 +11,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ..core.logging import get_logger
 from ..sources.dwd import DWDRadarSource
 from ..sources.shmu import SHMURadarSource
 from ..utils.storage import TimePartitionedStorage
 from .exporter import PNGExporter
 from .merger import RadarMerger
+
+logger = get_logger(__name__)
 
 
 class MergedProductsManager:
@@ -66,10 +69,10 @@ class MergedProductsManager:
         try:
             with open(config_path) as f:
                 config = json.load(f)
-            print(f"✅ Loaded extent config: {config_path}")
+            logger.info(f"Loaded extent config: {config_path}")
             return config
         except Exception as e:
-            print(f"⚠️  Failed to load extent config: {e}")
+            logger.warning(f"Failed to load extent config: {e}")
             return self._create_default_config()
 
     def _create_default_config(self) -> dict[str, Any]:
@@ -146,7 +149,10 @@ class MergedProductsManager:
         Returns:
             List of (timestamp, {source: [file_paths]}) tuples
         """
-        print(f"🔍 Finding matching timestamps across sources: {sources}")
+        logger.info(
+            f"Finding matching timestamps across sources: {sources}",
+            extra={"operation": "find"},
+        )
 
         # Collect all available timestamps from each source
         source_timestamps = {}
@@ -156,24 +162,34 @@ class MergedProductsManager:
                 source_name not in self.sources
                 or not self.sources[source_name]["enabled"]
             ):
-                print(f"⚠️  Source {source_name} not available")
+                logger.warning(
+                    f"Source {source_name} not available",
+                    extra={"source": source_name},
+                )
                 continue
 
             try:
                 # Look for files in time-partitioned storage
                 timestamps = self._get_source_timestamps(source_name, time_range_hours)
                 source_timestamps[source_name] = timestamps
-                print(f"📊 {source_name.upper()}: Found {len(timestamps)} timestamps")
+                logger.info(
+                    f"Found {len(timestamps)} timestamps",
+                    extra={"source": source_name, "count": len(timestamps)},
+                )
 
             except Exception as e:
-                print(f"❌ Error getting timestamps for {source_name}: {e}")
+                logger.error(
+                    f"Error getting timestamps for {source_name}: {e}",
+                    extra={"source": source_name},
+                )
                 continue
 
         # Find overlapping timestamps within tolerance
         matching = self._find_timestamp_matches(source_timestamps, min_sources)
 
-        print(
-            f"✅ Found {len(matching)} matching timestamps with {min_sources}+ sources"
+        logger.info(
+            f"Found {len(matching)} matching timestamps with {min_sources}+ sources",
+            extra={"count": len(matching)},
         )
         return matching
 
@@ -317,14 +333,19 @@ class MergedProductsManager:
         if output_dir is None:
             output_dir = Path("outputs/merged")
 
-        print(f"🚀 Creating merged products from sources: {sources}")
-        print(f"⏰ Time range: {time_range_hours} hours, Strategies: {strategies}")
+        logger.info(
+            f"Creating merged products from sources: {sources}",
+            extra={"operation": "merge"},
+        )
+        logger.debug(
+            f"Time range: {time_range_hours} hours, Strategies: {strategies}",
+        )
 
         # Find matching timestamps
         matches = self.find_matching_timestamps(sources, time_range_hours)
 
         if not matches:
-            print("❌ No matching timestamps found")
+            logger.warning("No matching timestamps found")
             return {"success": False, "message": "No matching timestamps found"}
 
         results = {
@@ -337,8 +358,9 @@ class MergedProductsManager:
         # Process each matching timestamp
         for timestamp, source_files in matches:
             try:
-                print(
-                    f"\\n🔄 Processing timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+                logger.info(
+                    f"Processing timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
+                    extra={"operation": "process", "timestamp": timestamp.strftime('%Y%m%d%H%M%S')},
                 )
 
                 # Load source data
@@ -373,16 +395,25 @@ class MergedProductsManager:
                         results["failed_timestamps"].append(timestamp)
 
             except Exception as e:
-                print(f"❌ Failed to process {timestamp}: {e}")
+                logger.error(
+                    f"Failed to process {timestamp}: {e}",
+                    extra={"timestamp": timestamp.strftime('%Y%m%d%H%M%S')},
+                )
                 results["failed_timestamps"].append(timestamp)
                 continue
 
         success_count = len(results["processed_timestamps"])
         total_count = len(matches)
 
-        print("\\n🎉 Merged products creation complete!")
-        print(f"✅ Processed: {success_count}/{total_count} timestamps")
-        print(f"📄 Generated: {len(results['output_files'])} output files")
+        logger.info("Merged products creation complete!")
+        logger.info(
+            f"Processed: {success_count}/{total_count} timestamps",
+            extra={"count": success_count},
+        )
+        logger.info(
+            f"Generated: {len(results['output_files'])} output files",
+            extra={"count": len(results['output_files'])},
+        )
 
         return results
 
@@ -413,7 +444,7 @@ class MergedProductsManager:
                         source_data.append(radar_data)
 
                 except Exception as e:
-                    print(f"⚠️  Failed to load {file_path}: {e}")
+                    logger.warning(f"Failed to load {file_path}: {e}")
                     continue
 
             if source_data:
@@ -440,12 +471,15 @@ class MergedProductsManager:
             )
 
             if merged:
-                print(f"✅ Created merged product using '{strategy}' strategy")
+                logger.info(
+                    f"Created merged product using '{strategy}' strategy",
+                    extra={"operation": "merge"},
+                )
 
             return merged
 
         except Exception as e:
-            print(f"❌ Merge failed for {strategy}: {e}")
+            logger.error(f"Merge failed for {strategy}: {e}")
             return None
 
     def _export_merged_png(
@@ -476,11 +510,14 @@ class MergedProductsManager:
             extent = merged_data["extent"]
             self.exporter.export_png_fast(merged_data, output_path, extent)
 
-            print(f"📄 Exported: {output_path}")
+            logger.info(
+                f"Saved: {output_path}",
+                extra={"operation": "export"},
+            )
             return output_path
 
         except Exception as e:
-            print(f"❌ PNG export failed: {e}")
+            logger.error(f"PNG export failed: {e}")
             return None
 
 
@@ -514,5 +551,5 @@ def create_merged_products_cli(
             return 1  # No data processed
 
     except Exception as e:
-        print(f"❌ Merged products creation failed: {e}")
+        logger.error(f"Merged products creation failed: {e}")
         return 1
