@@ -17,6 +17,7 @@ def composite_command_impl(args: Any) -> int:
         from .sources.arso import ARSORadarSource
         from .sources.chmi import CHMIRadarSource
         from .sources.dwd import DWDRadarSource
+        from .sources.imgw import IMGWRadarSource
         from .sources.omsz import OMSZRadarSource
         from .sources.shmu import SHMURadarSource
 
@@ -42,6 +43,8 @@ def composite_command_impl(args: Any) -> int:
                 sources["arso"] = (ARSORadarSource(), "zm")
             elif source_name == "omsz":
                 sources["omsz"] = (OMSZRadarSource(), "cmax")
+            elif source_name == "imgw":
+                sources["imgw"] = (IMGWRadarSource(), "cmax")
             else:
                 print(f"❌ Unknown source: {source_name}")
                 return 1
@@ -396,6 +399,7 @@ def _export_individual_sources(
         "chmi": Path("/tmp/czechia/"),
         "arso": Path("/tmp/slovenia"),
         "omsz": Path("/tmp/hungary/"),
+        "imgw": Path("/tmp/poland/"),
     }
 
     for source_name, radar_data in sources_data:
@@ -472,6 +476,7 @@ def _export_single_source(
         "chmi": Path("/tmp/czechia/"),
         "arso": Path("/tmp/slovenia/"),
         "omsz": Path("/tmp/hungary/"),
+        "imgw": Path("/tmp/poland/"),
     }
 
     output_dir = source_dirs.get(source_name)

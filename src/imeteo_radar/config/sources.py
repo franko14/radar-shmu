@@ -54,6 +54,14 @@ SOURCE_REGISTRY: dict[str, dict[str, Any]] = {
         "folder": "hungary",
         "description": "Hungarian Meteorological Service (OMSZ)",
     },
+    "imgw": {
+        "class_name": "IMGWRadarSource",
+        "module": "imeteo_radar.sources.imgw",
+        "product": "cmax",
+        "country": "poland",
+        "folder": "poland",
+        "description": "Polish Institute of Meteorology and Water Management (IMGW)",
+    },
 }
 
 
