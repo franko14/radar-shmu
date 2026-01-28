@@ -9,8 +9,7 @@ Data source: https://odp.met.hu/weather/radar/composite/
 import os
 import tempfile
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import netCDF4 as nc
@@ -19,6 +18,16 @@ import requests
 
 from ..core.base import RadarSource, lonlat_to_mercator
 from ..core.logging import get_logger
+from ..utils.parallel_download import (
+    create_download_result,
+    create_error_result,
+    execute_parallel_downloads,
+)
+from ..utils.timestamps import (
+    TimestampFormat,
+    filter_timestamps_by_range,
+    generate_timestamp_candidates,
+)
 
 logger = get_logger(__name__)
 
@@ -75,32 +84,6 @@ class OMSZRadarSource(RadarSource):
             }
         return super().get_product_metadata(product)
 
-    def _generate_timestamps(self, count: int) -> list[str]:
-        """Generate recent timestamps to search for available data"""
-        timestamps = []
-        import pytz
-
-        current_time = datetime.now(pytz.UTC)
-
-        # Start from current time and work backwards in 5-minute intervals
-        # OMSZ updates every 5 minutes, files available ~5 minutes after nominal time
-        for minutes_back in range(5, count * 30, 5):  # Start 5 min back
-            check_time = current_time - timedelta(minutes=minutes_back)
-            # Round down to nearest 5 minutes
-            check_time = check_time.replace(
-                minute=(check_time.minute // 5) * 5, second=0, microsecond=0
-            )
-            # OMSZ format: YYYYMMDD_HHMM
-            timestamp = check_time.strftime("%Y%m%d_%H%M")
-
-            if timestamp not in timestamps:
-                timestamps.append(timestamp)
-
-            if len(timestamps) >= count * 4:
-                break
-
-        return timestamps
-
     def _check_timestamp_availability(self, timestamp: str, product: str) -> bool:
         """Check if data is available for a specific timestamp and product"""
         url = self._get_product_url(timestamp, product)
@@ -109,37 +92,6 @@ class OMSZRadarSource(RadarSource):
             return response.status_code == 200
         except Exception:
             return False
-
-    def _filter_timestamps_by_range(
-        self, timestamps: list[str], start_time: datetime, end_time: datetime
-    ) -> list[str]:
-        """Filter timestamps to only include those within the specified time range
-
-        Args:
-            timestamps: List of timestamp strings in format YYYYMMDD_HHMM
-            start_time: Start of time range (timezone-aware datetime)
-            end_time: End of time range (timezone-aware datetime)
-
-        Returns:
-            Filtered list of timestamps within the range
-        """
-        import pytz
-
-        filtered = []
-        for ts in timestamps:
-            try:
-                # Parse OMSZ timestamp format: YYYYMMDD_HHMM
-                ts_dt = datetime.strptime(ts, "%Y%m%d_%H%M")
-                # Make timezone aware (OMSZ uses UTC)
-                ts_dt = pytz.UTC.localize(ts_dt)
-
-                # Check if timestamp is within range
-                if start_time <= ts_dt <= end_time:
-                    filtered.append(ts)
-            except ValueError:
-                continue
-
-        return filtered
 
     def _get_product_url(self, timestamp: str, product: str) -> str:
         """Generate URL for OMSZ product
@@ -162,7 +114,7 @@ class OMSZRadarSource(RadarSource):
             f"radar_composite-{nc_product}-{timestamp}.nc.zip"
         )
 
-    def _download_and_extract(self, url: str, timestamp: str, product: str) -> str:
+    def _download_and_extract(self, url: str, _timestamp: str, _product: str) -> str:
         """Download ZIP and extract netCDF file
 
         Args:
@@ -205,12 +157,7 @@ class OMSZRadarSource(RadarSource):
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
-            return {
-                "error": f"Unknown product: {product}",
-                "timestamp": timestamp,
-                "product": product,
-                "success": False,
-            }
+            return create_error_result(timestamp, product, f"Unknown product: {product}")
 
         try:
             # Check if we've already downloaded this file in this session
@@ -218,14 +165,13 @@ class OMSZRadarSource(RadarSource):
             if cache_key in self.temp_files:
                 # Normalize timestamp from YYYYMMDD_HHMM to YYYYMMDDHHMM00
                 normalized_timestamp = timestamp.replace("_", "") + "00"
-                return {
-                    "timestamp": normalized_timestamp,
-                    "product": product,
-                    "path": self.temp_files[cache_key],
-                    "url": self._get_product_url(timestamp, product),
-                    "cached": True,
-                    "success": True,
-                }
+                return create_download_result(
+                    timestamp=normalized_timestamp,
+                    product=product,
+                    path=self.temp_files[cache_key],
+                    url=self._get_product_url(timestamp, product),
+                    cached=True,
+                )
 
             # Download and extract
             url = self._get_product_url(timestamp, product)
@@ -236,22 +182,62 @@ class OMSZRadarSource(RadarSource):
 
             # Normalize timestamp from YYYYMMDD_HHMM to YYYYMMDDHHMM00
             normalized_timestamp = timestamp.replace("_", "") + "00"
-            return {
-                "timestamp": normalized_timestamp,
-                "product": product,
-                "path": nc_path,
-                "url": url,
-                "cached": False,
-                "success": True,
-            }
+            return create_download_result(
+                timestamp=normalized_timestamp,
+                product=product,
+                path=nc_path,
+                url=url,
+                cached=False,
+            )
 
         except Exception as e:
-            return {
-                "error": str(e),
-                "timestamp": timestamp,
-                "product": product,
-                "success": False,
-            }
+            return create_error_result(timestamp, product, str(e))
+
+    def get_available_timestamps(
+        self,
+        count: int = 8,
+        products: list[str] = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[str]:
+        """Get list of available OMSZ timestamps WITHOUT downloading.
+
+        Args:
+            count: Maximum number of timestamps to return
+            products: List of products to check (default: ['cmax'])
+            start_time: Optional start time for filtering
+            end_time: Optional end time for filtering
+
+        Returns:
+            List of timestamp strings in YYYYMMDD_HHMM format, newest first
+        """
+        # Generate candidate timestamps using shared utility
+        multiplier = 8 if (start_time and end_time) else 4
+        test_timestamps = generate_timestamp_candidates(
+            count=count * multiplier,
+            interval_minutes=5,
+            delay_minutes=5,  # OMSZ files available ~5 minutes after nominal time
+            format_str=TimestampFormat.UNDERSCORE,  # YYYYMMDD_HHMM
+        )
+
+        # Filter by time range if specified
+        if start_time and end_time:
+            test_timestamps = filter_timestamps_by_range(
+                test_timestamps, start_time, end_time,
+                parse_format=TimestampFormat.UNDERSCORE
+            )
+
+        # Find available timestamps
+        available_timestamps = []
+        for timestamp in test_timestamps:
+            if len(available_timestamps) >= count:
+                break
+            if self._check_timestamp_availability(timestamp, "cmax"):
+                available_timestamps.append(timestamp)
+
+        return available_timestamps
+
+    # download_timestamps is inherited from RadarSource base class
 
     def download_latest(
         self,
@@ -274,93 +260,33 @@ class OMSZRadarSource(RadarSource):
         if products is None:
             products = ["cmax"]  # Default to ZMAX equivalent
 
-        logger.info(f"Finding last {count} available timestamps...", extra={"source": "omsz"})
-        logger.info("Checking server for current timestamps...", extra={"source": "omsz"})
+        logger.info(
+            f"Finding last {count} available OMSZ timestamps...",
+            extra={"source": "omsz"},
+        )
+        logger.info(
+            "Checking OMSZ server for current timestamps...",
+            extra={"source": "omsz"},
+        )
 
-        # Generate more timestamps if we're filtering by time range
-        multiplier = 8 if (start_time and end_time) else 4
-        test_timestamps = self._generate_timestamps(count * multiplier)
+        # Get available timestamps
+        available_timestamps = self.get_available_timestamps(
+            count=count,
+            products=products,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
-        # Filter by time range if specified
-        if start_time and end_time:
-            test_timestamps = self._filter_timestamps_by_range(
-                test_timestamps, start_time, end_time
-            )
-            logger.info(
-                f"Filtered timestamps to range: "
-                f"{start_time.strftime('%Y-%m-%d %H:%M')} to "
-                f"{end_time.strftime('%Y-%m-%d %H:%M')}",
-                extra={"source": "omsz"},
-            )
-
-        available_timestamps = []
-
-        for timestamp in test_timestamps:
-            if len(available_timestamps) >= count:
-                break
-
-            # Test with cmax (most reliable product)
-            if self._check_timestamp_availability(timestamp, "cmax"):
-                available_timestamps.append(timestamp)
-                logger.info(f"Found: {timestamp}", extra={"source": "omsz"})
+        # Log found timestamps
+        for ts in available_timestamps:
+            logger.info(f"Found: {ts}", extra={"source": "omsz"})
 
         if not available_timestamps:
             logger.warning("No available timestamps found", extra={"source": "omsz"})
             return []
 
-        logger.info(
-            f"Downloading {len(available_timestamps)} timestamps "
-            f"x {len(products)} products...",
-            extra={"source": "omsz"},
-        )
-
-        # Create download tasks
-        download_tasks = []
-        for timestamp in available_timestamps:
-            for product in products:
-                download_tasks.append((timestamp, product))
-
-        logger.info(
-            f"Starting parallel downloads "
-            f"({len(download_tasks)} files, max 6 concurrent)...",
-            extra={"source": "omsz"},
-        )
-
-        # Execute downloads in parallel
-        downloaded_files = []
-        with ThreadPoolExecutor(max_workers=6) as executor:
-            future_to_task = {
-                executor.submit(self._download_single_file, timestamp, product): (
-                    timestamp,
-                    product,
-                )
-                for timestamp, product in download_tasks
-            }
-
-            for future in as_completed(future_to_task):
-                timestamp, product = future_to_task[future]
-                try:
-                    result = future.result()
-                    if result["success"]:
-                        downloaded_files.append(result)
-                        if result["cached"]:
-                            logger.debug(f"Using cached: {product} {timestamp}", extra={"source": "omsz"})
-                        else:
-                            logger.info(f"Downloaded: {product} {timestamp}", extra={"source": "omsz"})
-                    else:
-                        logger.error(
-                            f"Failed {product} {timestamp}: "
-                            f"{result.get('error', 'Unknown error')}",
-                            extra={"source": "omsz"},
-                        )
-                except Exception as e:
-                    logger.error(f"Exception {product} {timestamp}: {e}", extra={"source": "omsz"})
-
-        success_count = len(downloaded_files)
-        fail_count = len(download_tasks) - success_count
-        logger.info(f"OMSZ: Downloaded {success_count} files ({fail_count} failed)", extra={"source": "omsz", "count": success_count})
-
-        return downloaded_files
+        # Download the timestamps
+        return self.download_timestamps(available_timestamps, products)
 
     def process_to_array(self, file_path: str) -> dict[str, Any]:
         """Process OMSZ netCDF file to array with metadata
