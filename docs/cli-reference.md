@@ -91,7 +91,7 @@ imeteo-radar fetch --source shmu --update-extent
 
 ## composite
 
-Generate merged radar images from multiple sources using maximum reflectivity strategy.
+Generate merged radar images from multiple sources using maximum reflectivity strategy with intelligent caching.
 
 ### Usage
 
@@ -103,7 +103,7 @@ imeteo-radar composite [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--sources` | string | `dwd,shmu,chmi` | Comma-separated source list |
+| `--sources` | string | `dwd,shmu,chmi,omsz,arso,imgw` | Comma-separated source list |
 | `--output` | path | `/tmp/composite/` | Output directory |
 | `--resolution` | float | `500` | Target resolution in meters |
 | `--backload` | flag | - | Enable historical composite generation |
@@ -111,6 +111,7 @@ imeteo-radar composite [OPTIONS]
 | `--from` | string | - | Start time: `"YYYY-MM-DD HH:MM"` |
 | `--to` | string | - | End time: `"YYYY-MM-DD HH:MM"` |
 | `--update-extent` | flag | - | Force regenerate extent_index.json |
+| `--disable-upload` | flag | - | Skip cloud storage upload |
 
 ### Examples
 
@@ -134,6 +135,9 @@ imeteo-radar composite --backload --hours 6
 imeteo-radar composite --backload \
   --from "2024-11-10 10:00" --to "2024-11-10 12:00"
 
+# Local-only mode (no cloud upload)
+imeteo-radar composite --disable-upload
+
 # Combined options
 imeteo-radar composite \
   --sources dwd,shmu,chmi \
@@ -143,11 +147,43 @@ imeteo-radar composite \
 
 ### How It Works
 
-1. Downloads recent timestamps from each selected source
-2. Finds the most recent timestamp where ALL sources have data
-3. Reprojects all data to Web Mercator (EPSG:3857)
-4. Merges using maximum reflectivity (highest dBZ value wins)
-5. Exports as PNG with transparency
+1. **Check cache** for already-processed timestamps
+2. **Query providers** for available timestamps
+3. **Download only new** timestamps (skip cached)
+4. **Cache downloaded data** for future runs
+5. **Match timestamps** across sources (5-minute tolerance)
+6. **Reproject** all data to Web Mercator (EPSG:3857)
+7. **Merge** using maximum reflectivity (highest dBZ wins)
+8. **Export** as PNG with transparency
+
+### Cache-Aware Downloading
+
+The composite command uses intelligent caching to minimize downloads:
+
+```
+[15:42:23] 📡 DWD: 8 available, 7 in cache, 1 to download
+[15:42:25] 📡 SHMU: 8 available, 7 in cache, 1 to download
+[15:42:27] 📡 ARSO: 1 available, 1 in cache, 0 to download
+```
+
+- **First run**: Downloads all available timestamps
+- **Subsequent runs**: Downloads only new timestamps
+- **Efficiency**: ~90% reduction in network usage
+
+### Skip Reasons
+
+When timestamps are not processed, the reason is logged:
+
+```
+[15:42:36] 📡 Processed 1 composite(s), skipped 5
+[15:42:36] 📡   Already exist (local/S3): 5 [20260128142000, 20260128141500, ...]
+```
+
+| Reason | Description |
+|--------|-------------|
+| `Already exist` | Composite PNG already generated |
+| `Insufficient sources` | Less than 3/5 core sources available |
+| `Processing failed` | Error during merge/export |
 
 ### Coverage
 
@@ -244,12 +280,18 @@ The `extent_index.json` file contains:
 | **DWD** | dmax | Germany | ~1 km | 5 min |
 | **SHMU** | zmax | Slovakia | ~400 m | 5 min |
 | **CHMI** | maxz | Czech Republic | ~500 m | 5 min |
+| **OMSZ** | cmax | Hungary | ~500 m | 5 min |
+| **ARSO** | zm | Slovenia | ~1 km | 10-15 min |
+| **IMGW** | cmax | Poland | ~500 m | 5 min |
 
 ### Data URLs
 
 - **DWD**: https://opendata.dwd.de/weather/radar/composite/
 - **SHMU**: https://opendata.shmu.sk/
 - **CHMI**: https://opendata.chmi.cz/
+- **OMSZ**: https://odp.met.hu/
+- **ARSO**: https://vreme.arso.gov.si/
+- **IMGW**: https://meteo.imgw.pl/
 
 ---
 

@@ -7,14 +7,12 @@ Data is accessed via the IMGW public API at https://danepubliczne.imgw.pl/api/da
 """
 
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
-import pytz
 import requests
 
 from ..core.base import (
@@ -23,6 +21,22 @@ from ..core.base import (
     lonlat_to_mercator,
 )
 from ..core.logging import get_logger
+from ..utils.hdf5_utils import (
+    decode_hdf5_attrs,
+    get_quantity_units,
+    get_scaling_params,
+    scale_radar_data,
+)
+from ..utils.parallel_download import (
+    create_download_result,
+    create_error_result,
+    execute_parallel_downloads,
+)
+from ..utils.timestamps import (
+    TimestampFormat,
+    filter_timestamps_by_range,
+    generate_timestamp_candidates,
+)
 
 logger = get_logger(__name__)
 
@@ -126,31 +140,6 @@ class IMGWRadarSource(RadarSource):
             pass
         return None
 
-    def _generate_timestamps(self, count: int) -> list[str]:
-        """Generate recent timestamps to search for available data
-
-        IMGW updates every 5 minutes. Generate timestamps starting from
-        current UTC time and working backwards.
-        """
-        from datetime import timedelta
-
-        timestamps = []
-        current_time = datetime.now(pytz.UTC)
-
-        # Start from current time and work backwards in 5-minute intervals
-        # IMGW files are typically available with ~10 minute delay
-        for minutes_back in range(10, count * 30, 5):
-            check_time = current_time - timedelta(minutes=minutes_back)
-            # Round down to nearest 5 minutes
-            check_time = check_time.replace(
-                minute=(check_time.minute // 5) * 5, second=0, microsecond=0
-            )
-            timestamp = check_time.strftime("%Y%m%d%H%M%S")
-
-            if timestamp not in timestamps:
-                timestamps.append(timestamp)
-
-        return timestamps
 
     def _check_timestamp_availability(self, timestamp: str, product: str) -> bool:
         """Check if data is available for a specific timestamp and product
@@ -179,64 +168,29 @@ class IMGWRadarSource(RadarSource):
         hvd_folder = product_config["hvd_folder"]
         return f"{self.download_base_url}/{hvd_folder}/{timestamp}00dBZ.cmax.h5"
 
-    def _filter_timestamps_by_range(
-        self, timestamps: list[str], start_time: datetime, end_time: datetime
-    ) -> list[str]:
-        """Filter timestamps to only include those within the specified time range
 
-        Args:
-            timestamps: List of timestamp strings in format YYYYMMDDHHMMSS (14 digits)
-            start_time: Start of time range (timezone-aware datetime)
-            end_time: End of time range (timezone-aware datetime)
-
-        Returns:
-            Filtered list of timestamps within the range
-        """
-        filtered = []
-        for ts in timestamps:
-            try:
-                # Parse IMGW timestamp format: YYYYMMDDHHMMSS (14 digits)
-                ts_dt = datetime.strptime(ts, "%Y%m%d%H%M%S")
-                # Make timezone aware (IMGW uses UTC)
-                ts_dt = pytz.UTC.localize(ts_dt)
-
-                # Check if timestamp is within range
-                if start_time <= ts_dt <= end_time:
-                    filtered.append(ts)
-            except ValueError:
-                # Skip timestamps that can't be parsed
-                continue
-
-        return filtered
-
-    def _download_single_file(
-        self, timestamp: str, product: str, url: str | None = None
-    ) -> dict[str, Any]:
+    def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
-            return {
-                "error": f"Unknown product: {product}",
-                "timestamp": timestamp,
-                "product": product,
-                "success": False,
-            }
+            return create_error_result(
+                timestamp, product, f"Unknown product: {product}"
+            )
 
         try:
             # Check if we've already downloaded this file in this session
             cache_key = f"{timestamp}_{product}"
             if cache_key in self.temp_files:
-                return {
-                    "timestamp": timestamp,
-                    "product": product,
-                    "path": self.temp_files[cache_key],
-                    "url": url or self._get_product_url(timestamp, product),
-                    "cached": True,
-                    "success": True,
-                }
+                url = self._get_product_url(timestamp, product)
+                return create_download_result(
+                    timestamp=timestamp,
+                    product=product,
+                    path=self.temp_files[cache_key],
+                    url=url,
+                    cached=True,
+                )
 
             # Get download URL
-            if url is None:
-                url = self._get_product_url(timestamp, product)
+            url = self._get_product_url(timestamp, product)
 
             # Create a proper temporary file
             with tempfile.NamedTemporaryFile(
@@ -249,12 +203,11 @@ class IMGWRadarSource(RadarSource):
                 # Verify we got actual HDF5 data, not HTML
                 content = response.content
                 if content[:4] == b"<!DO" or content[:5] == b"<html":
-                    return {
-                        "error": "Server returned HTML instead of HDF5 data",
-                        "timestamp": timestamp,
-                        "product": product,
-                        "success": False,
-                    }
+                    return create_error_result(
+                        timestamp,
+                        product,
+                        "Server returned HTML instead of HDF5 data",
+                    )
 
                 temp_file.write(content)
                 temp_path = Path(temp_file.name)
@@ -262,22 +215,63 @@ class IMGWRadarSource(RadarSource):
             # Track the temporary file
             self.temp_files[cache_key] = str(temp_path)
 
-            return {
-                "timestamp": timestamp,
-                "product": product,
-                "path": str(temp_path),
-                "url": url,
-                "cached": False,
-                "success": True,
-            }
+            return create_download_result(
+                timestamp=timestamp,
+                product=product,
+                path=str(temp_path),
+                url=url,
+                cached=False,
+            )
 
         except Exception as e:
-            return {
-                "error": str(e),
-                "timestamp": timestamp,
-                "product": product,
-                "success": False,
-            }
+            return create_error_result(timestamp, product, str(e))
+
+    def get_available_timestamps(
+        self,
+        count: int = 8,
+        products: list[str] = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[str]:
+        """Get list of available IMGW timestamps WITHOUT downloading.
+
+        Args:
+            count: Maximum number of timestamps to return
+            products: List of products to check (default: ['cmax'])
+            start_time: Optional start time for filtering
+            end_time: Optional end time for filtering
+
+        Returns:
+            List of timestamp strings in YYYYMMDDHHMMSS format, newest first
+        """
+        # Generate more timestamps if we're filtering by time range
+        multiplier = 8 if (start_time and end_time) else 4
+        test_timestamps = generate_timestamp_candidates(
+            count=count * multiplier,
+            interval_minutes=5,
+            delay_minutes=10,  # IMGW has ~10 minute delay
+            format_str=TimestampFormat.FULL,  # YYYYMMDDHHMMSS
+        )
+
+        # Filter by time range if specified
+        if start_time and end_time:
+            test_timestamps = filter_timestamps_by_range(
+                test_timestamps, start_time, end_time
+            )
+
+        # Check which timestamps are available
+        available_timestamps = []
+        for timestamp in test_timestamps:
+            if len(available_timestamps) >= count:
+                break
+
+            # Check availability via HEAD request
+            if self._check_timestamp_availability(timestamp, "cmax"):
+                available_timestamps.append(timestamp)
+
+        return available_timestamps
+
+    # download_timestamps is inherited from RadarSource base class
 
     def download_latest(
         self,
@@ -309,33 +303,20 @@ class IMGWRadarSource(RadarSource):
             extra={"source": "imgw"},
         )
 
-        # Generate more timestamps if we're filtering by time range
-        multiplier = 8 if (start_time and end_time) else 4
-        test_timestamps = self._generate_timestamps(count * multiplier)
+        # Get available timestamps
+        available_timestamps = self.get_available_timestamps(
+            count=count,
+            products=products,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
-        # Filter by time range if specified
-        if start_time and end_time:
-            test_timestamps = self._filter_timestamps_by_range(
-                test_timestamps, start_time, end_time
+        # Log found timestamps
+        for ts in available_timestamps:
+            logger.debug(
+                f"Found current: {ts}",
+                extra={"source": "imgw", "timestamp": ts},
             )
-            logger.info(
-                f"Filtered to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}",
-                extra={"source": "imgw"},
-            )
-
-        # Check which timestamps are available
-        available_timestamps = []
-        for timestamp in test_timestamps:
-            if len(available_timestamps) >= count:
-                break
-
-            # Check availability via HEAD request
-            if self._check_timestamp_availability(timestamp, "cmax"):
-                available_timestamps.append(timestamp)
-                logger.debug(
-                    f"Found current: {timestamp}",
-                    extra={"source": "imgw", "timestamp": timestamp},
-                )
 
         if not available_timestamps:
             logger.warning(
@@ -344,87 +325,8 @@ class IMGWRadarSource(RadarSource):
             )
             return []
 
-        logger.info(
-            f"Downloading {len(available_timestamps)} timestamps × {len(products)} products...",
-            extra={"source": "imgw", "operation": "download", "count": len(available_timestamps)},
-        )
-
-        # Create download tasks
-        download_tasks = []
-        for timestamp in available_timestamps:
-            for product in products:
-                url = self._get_product_url(timestamp, product)
-                download_tasks.append((timestamp, product, url))
-
-        logger.debug(
-            f"Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)",
-            extra={"source": "imgw", "operation": "download", "count": len(download_tasks)},
-        )
-
-        # Execute downloads in parallel
-        downloaded_files = []
-        with ThreadPoolExecutor(max_workers=6) as executor:
-            # Submit all download tasks
-            future_to_task = {
-                executor.submit(
-                    self._download_single_file, timestamp, product, url
-                ): (timestamp, product)
-                for timestamp, product, url in download_tasks
-            }
-
-            # Process completed downloads
-            for future in as_completed(future_to_task):
-                timestamp, product = future_to_task[future]
-                try:
-                    result = future.result()
-                    if result["success"]:
-                        downloaded_files.append(result)
-                        if result["cached"]:
-                            logger.debug(
-                                f"Using cached: {product} {timestamp}",
-                                extra={
-                                    "source": "imgw",
-                                    "product": product,
-                                    "timestamp": timestamp,
-                                },
-                            )
-                        else:
-                            logger.debug(
-                                f"Downloaded: {product} {timestamp}",
-                                extra={
-                                    "source": "imgw",
-                                    "product": product,
-                                    "timestamp": timestamp,
-                                },
-                            )
-                    else:
-                        logger.error(
-                            f"Failed {product} {timestamp}: {result.get('error', 'Unknown error')}",
-                            extra={
-                                "source": "imgw",
-                                "product": product,
-                                "timestamp": timestamp,
-                            },
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Exception {product} {timestamp}: {e}",
-                        extra={
-                            "source": "imgw",
-                            "product": product,
-                            "timestamp": timestamp,
-                        },
-                    )
-
-        logger.info(
-            f"IMGW: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)",
-            extra={
-                "source": "imgw",
-                "operation": "download",
-                "count": len(downloaded_files),
-            },
-        )
-        return downloaded_files
+        # Download the timestamps
+        return self.download_timestamps(available_timestamps, products)
 
     def process_to_array(self, file_path: str) -> dict[str, Any]:
         """Process IMGW HDF5 file to array with metadata
@@ -441,29 +343,29 @@ class IMGWRadarSource(RadarSource):
                 # Read raw data
                 data = f["dataset1/data1/data"][:]
 
-                # Get attributes - IMGW stores scaling in dataset1/what (NOT data1/what)
-                what_attrs = dict(f["dataset1/what"].attrs)
-                what_global = dict(f["what"].attrs)  # Global metadata
-                where_attrs = dict(f["where"].attrs)
+                # Get and decode attributes - IMGW stores scaling in dataset1/what (NOT data1/what)
+                what_attrs = decode_hdf5_attrs(dict(f["dataset1/what"].attrs))
+                what_global = decode_hdf5_attrs(dict(f["what"].attrs))  # Global metadata
+                where_attrs = decode_hdf5_attrs(dict(f["where"].attrs))
 
-                # Decode byte strings
-                for attr_dict in [what_attrs, what_global, where_attrs]:
-                    for key, value in attr_dict.items():
-                        if isinstance(value, bytes):
-                            attr_dict[key] = value.decode("utf-8")
-
-                # Apply scaling (from dataset1/what)
-                gain = what_attrs.get("gain", 0.5)
-                offset = what_attrs.get("offset", -32.0)
-                nodata = what_attrs.get("nodata", 255.0)
-                undetect = what_attrs.get("undetect", 0.0)
+                # Get scaling parameters
+                scaling = get_scaling_params(
+                    what_attrs,
+                    default_gain=0.5,
+                    default_offset=-32.0,
+                    default_nodata=255,
+                    default_undetect=0,
+                )
 
                 # Scale data
-                scaled_data = data.astype(np.float32) * gain + offset
-
-                # Handle special values
-                scaled_data[data == int(nodata)] = np.nan
-                scaled_data[data == int(undetect)] = np.nan
+                scaled_data = scale_radar_data(
+                    data,
+                    scaling["gain"],
+                    scaling["offset"],
+                    scaling["nodata"],
+                    scaling["undetect"],
+                    handle_uint8=True,  # IMGW uses uint8 with 255 as nodata
+                )
 
                 # Get corner coordinates from where attributes
                 # IMGW uses LL (lower-left), UR (upper-right) pattern
@@ -499,10 +401,10 @@ class IMGWRadarSource(RadarSource):
                         "quantity": quantity,
                         "timestamp": timestamp,
                         "source": "IMGW",
-                        "units": self._get_units(quantity),
+                        "units": get_quantity_units(quantity),
                         "nodata_value": np.nan,
-                        "gain": gain,
-                        "offset": offset,
+                        "gain": scaling["gain"],
+                        "offset": scaling["offset"],
                     },
                     "extent": {
                         "wgs84": {
@@ -520,11 +422,6 @@ class IMGWRadarSource(RadarSource):
 
         except Exception as e:
             raise RuntimeError(f"Failed to process IMGW file {file_path}: {e}")
-
-    def _get_units(self, quantity: str) -> str:
-        """Get units for a quantity"""
-        units_map = {"DBZH": "dBZ", "TH": "dBZ"}
-        return units_map.get(quantity, "dBZ")  # Default to dBZ for reflectivity
 
     def get_extent(self) -> dict[str, Any]:
         """Get IMGW radar coverage extent"""

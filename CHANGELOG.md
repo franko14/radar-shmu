@@ -5,6 +5,47 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-01-28
+
+### Added
+- **Cache-aware downloading**: Skip downloads for timestamps already in cache
+  - Query providers for available timestamps without downloading
+  - Check cache before deciding what to download
+  - ~90% reduction in redundant downloads per run
+  - Enhanced logging: "DWD: 8 available, 7 in cache, 1 to download"
+
+- **Dual-layer processed data cache** (`ProcessedDataCache`)
+  - Layer 1: Local filesystem (/tmp/iradar-data) - fast, ephemeral
+  - Layer 2: S3/DO Spaces - persistent across pod restarts
+  - TTL-based expiration (60 minutes default)
+  - Automatic cleanup of expired entries
+
+- **S3 composite existence check**: Prevent regenerating composites after pod restart
+  - Check S3 before processing if local file doesn't exist
+  - `file_exists()` method in SpacesUploader
+
+- **Skip reason tracking**: See why timestamps are excluded from processing
+  - Categories: already_exists, insufficient_sources, processing_failed
+  - Enhanced summary logging with exact skip reasons
+
+- **Shared utility modules** for code deduplication:
+  - `timestamps.py`: Timestamp generation, normalization, cache checking
+  - `hdf5_utils.py`: Common HDF5 processing functions
+  - `parallel_download.py`: Parallel download execution
+
+### Changed
+- **Refactored all 6 source implementations** to use cache-aware pattern
+  - New `get_available_timestamps()` method (query without download)
+  - New `download_timestamps()` method (download specific timestamps)
+  - ARSO special handling (only provides latest timestamp)
+  - ~150 lines of duplicate code removed
+
+### Documentation
+- Added cache-aware downloading mermaid diagrams
+- Documented all 6 sources with correct specifications
+- Added cache troubleshooting guide
+- Added S3 composite existence check documentation
+
 ## [2.2.1] - 2026-01-28
 
 ### Added

@@ -91,41 +91,57 @@ class TestIMGWProducts:
 
 
 class TestIMGWTimestamps:
-    """Test IMGW timestamp generation"""
+    """Test timestamp generation using utility module (for IMGW YYYYMMDDHHMMSS format)"""
 
     def test_generate_timestamps_returns_list(self):
-        """Test that _generate_timestamps returns a list"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        """Test that generate_timestamp_candidates returns a list"""
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            generate_timestamp_candidates,
+        )
 
-        source = IMGWRadarSource()
-        timestamps = source._generate_timestamps(3)
+        timestamps = generate_timestamp_candidates(
+            count=3, interval_minutes=5, delay_minutes=10, format_str=TimestampFormat.FULL
+        )
         assert isinstance(timestamps, list)
 
     def test_generate_timestamps_returns_correct_count(self):
-        """Test that _generate_timestamps returns expected number of timestamps"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        """Test that generate_timestamp_candidates returns expected number of timestamps"""
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            generate_timestamp_candidates,
+        )
 
-        source = IMGWRadarSource()
-        timestamps = source._generate_timestamps(3)
-        # Should return at least count * 4 to account for missing data
+        timestamps = generate_timestamp_candidates(
+            count=3, interval_minutes=5, delay_minutes=10, format_str=TimestampFormat.FULL
+        )
+        # Should return at least count to account for missing data
         assert len(timestamps) >= 3
 
     def test_generate_timestamps_format_is_14_digits(self):
         """Test that timestamps are 14 digits (YYYYMMDDHHMMSS)"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            generate_timestamp_candidates,
+        )
 
-        source = IMGWRadarSource()
-        timestamps = source._generate_timestamps(3)
+        timestamps = generate_timestamp_candidates(
+            count=3, interval_minutes=5, delay_minutes=10, format_str=TimestampFormat.FULL
+        )
         for ts in timestamps:
             assert len(ts) == 14
             assert ts.isdigit()
 
     def test_generate_timestamps_are_5_minute_intervals(self):
         """Test that timestamps are at 5-minute intervals"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            generate_timestamp_candidates,
+        )
 
-        source = IMGWRadarSource()
-        timestamps = source._generate_timestamps(5)
+        timestamps = generate_timestamp_candidates(
+            count=5, interval_minutes=5, delay_minutes=10, format_str=TimestampFormat.FULL
+        )
         for ts in timestamps:
             # Extract minutes
             minutes = int(ts[10:12])
@@ -133,10 +149,14 @@ class TestIMGWTimestamps:
 
     def test_generate_timestamps_are_unique(self):
         """Test that generated timestamps are unique"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            generate_timestamp_candidates,
+        )
 
-        source = IMGWRadarSource()
-        timestamps = source._generate_timestamps(10)
+        timestamps = generate_timestamp_candidates(
+            count=10, interval_minutes=5, delay_minutes=10, format_str=TimestampFormat.FULL
+        )
         assert len(timestamps) == len(set(timestamps))
 
 
@@ -663,25 +683,31 @@ class TestIMGWPackageExport:
 
 
 class TestIMGWFilterTimestamps:
-    """Test IMGW timestamp filtering by time range"""
+    """Test timestamp filtering by time range using utility module"""
 
     def test_filter_timestamps_by_range_returns_list(self):
-        """Test that _filter_timestamps_by_range returns a list"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        """Test that filter_timestamps_by_range returns a list"""
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            filter_timestamps_by_range,
+        )
 
-        source = IMGWRadarSource()
         start = datetime(2025, 1, 27, 10, 0, tzinfo=pytz.UTC)
         end = datetime(2025, 1, 27, 12, 0, tzinfo=pytz.UTC)
         timestamps = ["20250127100000", "20250127110000", "20250127120000"]
 
-        result = source._filter_timestamps_by_range(timestamps, start, end)
+        result = filter_timestamps_by_range(
+            timestamps, start, end, parse_format=TimestampFormat.FULL
+        )
         assert isinstance(result, list)
 
     def test_filter_timestamps_by_range_filters_correctly(self):
         """Test that timestamps outside range are filtered out"""
-        from imeteo_radar.sources.imgw import IMGWRadarSource
+        from imeteo_radar.utils.timestamps import (
+            TimestampFormat,
+            filter_timestamps_by_range,
+        )
 
-        source = IMGWRadarSource()
         start = datetime(2025, 1, 27, 10, 0, tzinfo=pytz.UTC)
         end = datetime(2025, 1, 27, 11, 0, tzinfo=pytz.UTC)
         timestamps = [
@@ -692,7 +718,9 @@ class TestIMGWFilterTimestamps:
             "20250127120000",  # After range
         ]
 
-        result = source._filter_timestamps_by_range(timestamps, start, end)
+        result = filter_timestamps_by_range(
+            timestamps, start, end, parse_format=TimestampFormat.FULL
+        )
         assert "20250127090000" not in result
         assert "20250127100000" in result
         assert "20250127103000" in result

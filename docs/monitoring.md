@@ -225,6 +225,47 @@ docker inspect dwd-fetcher --format='{{.State.ExitCode}}'
 - Command finished (expected for one-time jobs)
 - Missing dependencies
 
+### Cache Issues
+
+**Symptoms**: Data re-downloaded every run despite caching
+
+**Check**:
+```bash
+# Verify cache directory exists
+ls -la ~/.cache/imeteo-radar/
+
+# Check cache contents
+ls -la ~/.cache/imeteo-radar/*.npz | head -20
+
+# Check cache age
+find ~/.cache/imeteo-radar/ -name "*.npz" -mmin -60 | wc -l
+```
+
+**Common causes**:
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Cache miss | Timestamp format mismatch | Check logs for timestamp normalization |
+| Re-downloading | Cache directory not persisted | Mount volume in Docker/K8s |
+| Stale data | Cache not updated | Clear cache: `rm -rf ~/.cache/imeteo-radar/` |
+| Disk full | Too many cached files | Automatic cleanup after 2 hours |
+
+**Docker volume mount for cache persistence**:
+```bash
+docker run -v imeteo-cache:/root/.cache/imeteo-radar imeteo-radar composite
+```
+
+**Kubernetes PVC for cache**:
+```yaml
+volumes:
+  - name: cache
+    persistentVolumeClaim:
+      claimName: imeteo-cache
+volumeMounts:
+  - name: cache
+    mountPath: /root/.cache/imeteo-radar
+```
+
 ---
 
 ## Scheduled Monitoring
@@ -260,6 +301,55 @@ Run 30-day analysis to establish baselines:
 # - Composite potential: >90%
 ```
 
+### Cache Efficiency Monitoring
+
+Monitor cache hit rates over time:
+
+```bash
+# Create monitoring script
+cat > /tmp/composite_monitor.sh << 'EOF'
+#!/bin/bash
+LOG_DIR="/tmp/composite_logs"
+mkdir -p "$LOG_DIR"
+
+for i in {1..8}; do
+    echo "--- Run $i at $(date) ---"
+    imeteo-radar composite --disable-upload 2>&1 | tee "$LOG_DIR/run_$i.log"
+    sleep 240
+done
+
+# Analyze results
+echo "=== Cache Efficiency ==="
+for f in "$LOG_DIR"/run_*.log; do
+    downloaded=$(grep -c "to download$" "$f" 2>/dev/null || echo "0")
+    cached=$(grep -c "in cache" "$f" 2>/dev/null || echo "0")
+    echo "$(basename $f): $cached cached, $downloaded downloaded"
+done
+EOF
+chmod +x /tmp/composite_monitor.sh
+```
+
+**Expected metrics**:
+
+| Metric | Good | Warning | Critical |
+|--------|------|---------|----------|
+| Cache hit rate | >85% | 70-85% | <70% |
+| Downloads per run | 1-2/source | 3-4/source | >5/source |
+| Composites per run | 1 | 0-2 | >3 (indicates gaps) |
+
+### Composite Generation Analysis
+
+```bash
+# Count composites generated over 30 minutes
+grep "Processed.*composite" /tmp/composite_logs/*.log | \
+  awk -F'Processed ' '{print $2}' | \
+  awk '{sum+=$1} END {print "Total composites:", sum}'
+
+# Count skipped timestamps by reason
+grep "Already exist" /tmp/composite_logs/*.log | wc -l
+grep "Insufficient sources" /tmp/composite_logs/*.log | wc -l
+```
+
 ---
 
 ## Log Analysis
@@ -287,27 +377,91 @@ Look for these patterns:
 | `☁️ Uploaded to Spaces` | Cloud upload success |
 | `🗑️ Cleaned up X files` | Old file cleanup |
 
+### Cache-Related Log Entries
+
+| Log | Meaning |
+|-----|---------|
+| `📡 DWD: 8 available, 7 in cache, 1 to download` | Cache hit - only 1 new file |
+| `📡 ARSO: 1 available, 1 in cache, 0 to download` | Full cache hit - no download needed |
+| `📡 Cached: dwd_dmax_202601281430.npz` | New data cached |
+| `📡 Timestamps available for matching` | Summary of available timestamps |
+| `📡 Processed 1 composite(s), skipped 5` | Composites generated vs skipped |
+| `📡   Already exist (local/S3): 5` | Skip reason: already generated |
+| `📡   Insufficient sources: 1` | Skip reason: not enough data |
+
+### Cache Efficiency Interpretation
+
+| Pattern | Status |
+|---------|--------|
+| `X available, X-1 in cache, 1 to download` | Normal - only newest timestamp downloaded |
+| `X available, X in cache, 0 to download` | Full cache hit - source hasn't updated |
+| `X available, 0 in cache, X to download` | Cold cache or cache cleared |
+| `0 available` | Source offline or network issue |
+
+### S3 Composite Existence Check
+
+The composite command checks both local and S3 before processing:
+
+1. **Local check** (fast) - `output_dir/{timestamp}.png`
+2. **S3 check** (if local miss) - `iradar/composite/{timestamp}.png`
+
+This prevents regenerating composites after pod restarts in Kubernetes deployments where local storage is ephemeral.
+
+```
+# Log when composite exists in S3 but not locally
+[15:42:29] 📡 Processed 0 composite(s), skipped 6
+[15:42:29] 📡   Already exist (local/S3): 6 [...]
+```
+
 ---
 
 ## Source-Specific Issues
 
-### DWD
+### DWD (Germany)
 
 - Uses LATEST endpoint - check if updated
 - Stereographic projection may cause coordinate issues
 - SSL certificate usually valid
+- Timestamp format: `YYYYMMDD_HHMM` (with underscore)
 
-### SHMU
+### SHMU (Slovakia)
 
 - SSL verification disabled (may have cert issues)
 - 5-minute update intervals
 - Coverage limited to Slovakia region
+- Timestamp format: `YYYYMMDDHHMM`
 
-### CHMI
+### CHMI (Czech Republic)
 
 - Newer source, may be less stable
 - Check directory structure hasn't changed
 - Data path differs from SHMU/DWD
+- Timestamp format: `YYYYMMDDHHMMSS` (includes seconds)
+
+### OMSZ (Hungary)
+
+- Uses opendata portal at https://odp.met.hu/
+- **netCDF format** (zipped), not HDF5
+- Timestamp format: `YYYYMMDD_HHMM` (with underscore)
+- Data scaling: `dBZ = raw / 2 - 32`
+- Products: cmax (refl2D), pscappi (refl2D_pscappi)
+
+### ARSO (Slovenia)
+
+- **Special case**: Only provides latest timestamp (no archive)
+- **SRD-3 format** (proprietary Slovenian Radar Data format)
+- Lambert Conformal Conic projection (SIRAD)
+- Update frequency: 10-15 minutes (slower than others)
+- Cache shows "1 available" at most
+- Base URL: https://meteo.arso.gov.si/uploads/probase/www/observ/radar
+
+### IMGW (Poland)
+
+- Uses IMGW public data portal at https://danepubliczne.imgw.pl/
+- ODIM_H5 format (HDF5)
+- Timestamp format: `YYYYMMDDHHMMSS` (14 digits)
+- Files served via HVD path (not POLCOMP API)
+- 5-minute update intervals, ~10 minute delay
 
 ---
 

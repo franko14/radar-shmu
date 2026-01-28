@@ -21,6 +21,10 @@ from pyproj import CRS, Transformer
 
 from ..core.base import RadarSource, lonlat_to_mercator
 from ..core.logging import get_logger
+from ..utils.parallel_download import (
+    create_download_result,
+    create_error_result,
+)
 
 logger = get_logger(__name__)
 
@@ -256,11 +260,7 @@ class ARSORadarSource(RadarSource):
     def _download_single_file(self, product: str) -> dict[str, Any]:
         """Download a single radar file"""
         if product not in self.PRODUCTS:
-            return {
-                "error": f"Unknown product: {product}",
-                "product": product,
-                "success": False,
-            }
+            return create_error_result("", product, f"Unknown product: {product}")
 
         try:
             url = self._get_product_url(product)
@@ -270,13 +270,13 @@ class ARSORadarSource(RadarSource):
             if cache_key in self.temp_files:
                 # Check if file still exists
                 if os.path.exists(self.temp_files[cache_key]):
-                    return {
-                        "product": product,
-                        "path": self.temp_files[cache_key],
-                        "url": url,
-                        "cached": True,
-                        "success": True,
-                    }
+                    return create_download_result(
+                        timestamp="",
+                        product=product,
+                        path=self.temp_files[cache_key],
+                        url=url,
+                        cached=True,
+                    )
 
             # Download to temporary file
             response = requests.get(url, timeout=30)
@@ -292,16 +292,106 @@ class ARSORadarSource(RadarSource):
             # Track the temporary file
             self.temp_files[cache_key] = str(temp_path)
 
-            return {
-                "product": product,
-                "path": str(temp_path),
-                "url": url,
-                "cached": False,
-                "success": True,
-            }
+            return create_download_result(
+                timestamp="",
+                product=product,
+                path=str(temp_path),
+                url=url,
+                cached=False,
+            )
 
         except Exception as e:
-            return {"error": str(e), "product": product, "success": False}
+            return create_error_result("", product, str(e))
+
+    def get_available_timestamps(
+        self,
+        count: int = 1,
+        products: list[str] = None,
+    ) -> list[str]:
+        """Get list of available ARSO timestamps.
+
+        ARSO only provides the latest timestamp (no archive).
+        This method downloads the file header to extract the timestamp.
+
+        Args:
+            count: Ignored (ARSO only provides latest)
+            products: List of products to check (default: ['zm'])
+
+        Returns:
+            List with single timestamp string, or empty list if unavailable
+        """
+        if products is None:
+            products = ["zm"]
+
+        # Try to get timestamp from the first available product
+        for product in products:
+            try:
+                url = self._get_product_url(product)
+                # Download just enough to parse the header (first 2KB)
+                response = requests.get(url, timeout=30, headers={"Range": "bytes=0-2048"})
+                if response.status_code in [200, 206]:
+                    content = response.text
+                    header = self._parse_srd_header(content)
+                    time_parts = header.get("time", [])
+                    if isinstance(time_parts, list) and len(time_parts) >= 5:
+                        timestamp = f"{time_parts[0]:04d}{time_parts[1]:02d}{time_parts[2]:02d}{time_parts[3]:02d}{time_parts[4]:02d}00"
+                        return [timestamp]
+            except Exception as e:
+                logger.debug(f"Could not fetch ARSO timestamp: {e}", extra={"source": "arso"})
+                continue
+
+        return []
+
+    def download_timestamps(
+        self,
+        timestamps: list[str],
+        products: list[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Download specific ARSO timestamps.
+
+        ARSO only provides the latest data. This method downloads the latest
+        and returns it only if it matches one of the requested timestamps.
+
+        Args:
+            timestamps: List of requested timestamps (YYYYMMDDHHMMSS format)
+            products: List of products to download (default: ['zm'])
+
+        Returns:
+            List of file info dicts (may be empty if latest doesn't match)
+        """
+        if products is None:
+            products = ["zm"]
+
+        if not timestamps:
+            return []
+
+        # Download latest and check if it matches
+        downloaded_files = self.download_latest(count=1, products=products)
+
+        # Filter to only return files whose timestamp matches requested
+        matching_files = []
+        for file_info in downloaded_files:
+            file_ts = file_info.get("timestamp", "")
+            # Normalize timestamps for comparison (first 12 digits = YYYYMMDDHHMM)
+            file_ts_normalized = file_ts[:12]
+            for requested_ts in timestamps:
+                requested_normalized = requested_ts[:12]
+                if file_ts_normalized == requested_normalized:
+                    matching_files.append(file_info)
+                    break
+
+        if matching_files:
+            logger.info(
+                f"ARSO: Latest timestamp matches requested, returning {len(matching_files)} files",
+                extra={"source": "arso"},
+            )
+        else:
+            logger.debug(
+                f"ARSO: Latest timestamp doesn't match any requested timestamps",
+                extra={"source": "arso"},
+            )
+
+        return matching_files
 
     def download_latest(
         self,
