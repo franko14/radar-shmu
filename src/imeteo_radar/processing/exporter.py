@@ -15,6 +15,10 @@ from typing import Any
 
 from PIL import Image
 
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Import SHMU colormap if available
 try:
     from ..config.shmu_colormap import get_shmu_colormap
@@ -61,7 +65,7 @@ class PNGExporter:
                 "units": "dBZ",
                 "range": [-35, 85],
             }
-            print("✅ SHMU colormap loaded as single source of colorscale")
+            logger.info("SHMU colormap loaded as single source of colorscale")
         except Exception as e:
             raise RuntimeError(
                 f"Failed to load SHMU colormap: {e}. "
@@ -136,7 +140,10 @@ class PNGExporter:
             if isinstance(data, list):
                 data = np.array(data)
 
-            print(f"📊 Exporting {data.shape} array to PNG: {output_path}")
+            logger.debug(
+                f"Exporting {data.shape} array to PNG: {output_path}",
+                extra={"operation": "export"},
+            )
 
             # Determine colormap
             cmap_info = self._select_colormap(radar_data, colormap_type)
@@ -198,7 +205,10 @@ class PNGExporter:
                     )
                 img.save(output_path, format="PNG", optimize=True, compress_level=9)
             except Exception as e:
-                print(f"⚠️  Could not convert to indexed PNG: {e}, keeping original")
+                logger.warning(
+                    f"Could not convert to indexed PNG: {e}, keeping original",
+                    extra={"operation": "export"},
+                )
 
             # Create metadata without duplicating extent information
             metadata = {
@@ -216,15 +226,18 @@ class PNGExporter:
                 "format": "PNG (8-bit indexed palette, optimized)",
             }
 
-            print(f"✅ PNG exported: {output_path}")
-            print(
-                f"📐 Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {cmap_info['units']}"
+            logger.info(
+                f"Saved: {output_path}",
+                extra={"operation": "export"},
+            )
+            logger.debug(
+                f"Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {cmap_info['units']}",
             )
 
             return output_path, metadata
 
         except Exception as e:
-            print(f"❌ PNG export failed: {e}")
+            logger.error(f"PNG export failed: {e}")
             raise
 
     def export_png_fast(
@@ -255,7 +268,10 @@ class PNGExporter:
             if data is None or data.size == 0:
                 raise ValueError("Empty or invalid radar data")
 
-            print(f"🚀 Fast PNG export: {data.shape} -> {output_path}")
+            logger.debug(
+                f"Fast PNG export: {data.shape} -> {output_path}",
+                extra={"operation": "export"},
+            )
 
             # Get colormap name (for LUT lookup)
             cmap_info = self._select_colormap(radar_data, colormap_type)
@@ -336,17 +352,20 @@ class PNGExporter:
                 "format": "PNG (8-bit indexed palette, optimized)",
             }
 
-            print(f"⚡ Fast PNG exported: {output_path}")
-            print(
-                f"📐 Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {lut_info['units']}"
+            logger.info(
+                f"Saved: {output_path}",
+                extra={"operation": "export"},
+            )
+            logger.debug(
+                f"Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {lut_info['units']}",
             )
 
             return output_path, metadata
 
         except Exception as e:
-            print(f"❌ Fast PNG export failed: {e}")
+            logger.error(f"Fast PNG export failed: {e}")
             # Fallback to matplotlib method
-            print("📉 Falling back to matplotlib export...")
+            logger.info("Falling back to matplotlib export...", extra={"operation": "export"})
             return self.export_png(
                 radar_data,
                 output_path,
@@ -383,8 +402,8 @@ class PNGExporter:
                 return {"name": "precipitation", **self.colormaps["precipitation"]}
             else:
                 # Fallback to SHMU colormap even for precipitation to maintain consistency
-                print(
-                    "⚠️  Using SHMU reflectivity colormap for precipitation data (single source principle)"
+                logger.warning(
+                    "Using SHMU reflectivity colormap for precipitation data (single source principle)",
                 )
                 return {
                     "name": "reflectivity_shmu",
@@ -392,8 +411,8 @@ class PNGExporter:
                 }
         else:
             # Default to SHMU reflectivity colormap for all unknowns
-            print(
-                f"⚠️  Unknown data type (units: {units}, quantity: {quantity}), using SHMU colormap"
+            logger.warning(
+                f"Unknown data type (units: {units}, quantity: {quantity}), using SHMU colormap",
             )
             return {"name": "reflectivity_shmu", **self.colormaps["reflectivity_shmu"]}
 
@@ -443,6 +462,9 @@ class PNGExporter:
 
         plt.close(fig)
 
-        print(f"✅ Colorbar legend saved: {output_path}")
+        logger.info(
+            f"Saved: {output_path}",
+            extra={"operation": "export"},
+        )
 
         return output_path

@@ -18,6 +18,10 @@ If credentials are not available, upload is disabled and processing continues lo
 import os
 from pathlib import Path
 
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     import boto3
     from botocore.exceptions import ClientError, NoCredentialsError
@@ -120,7 +124,7 @@ class SpacesUploader:
         local_path = Path(local_path)
 
         if not local_path.exists():
-            print(f"❌ Local file not found: {local_path}")
+            logger.error(f"Local file not found: {local_path}")
             return None
 
         # Determine folder based on source using centralized registry
@@ -141,14 +145,17 @@ class SpacesUploader:
             # Construct public URL
             public_url = f"{self.spaces_url}/{s3_key}"
 
-            print(f"☁️  Uploaded to Spaces: {public_url}")
+            logger.info(
+                f"Uploaded to Spaces: {public_url}",
+                extra={"source": source, "operation": "upload"},
+            )
             return public_url
 
         except ClientError as e:
-            print(f"❌ Failed to upload to Spaces: {e}")
+            logger.error(f"Failed to upload to Spaces: {e}")
             return None
         except Exception as e:
-            print(f"❌ Unexpected error during upload: {e}")
+            logger.error(f"Unexpected error during upload: {e}")
             return None
 
     def delete_file(self, source: str, filename: str) -> bool:
@@ -170,10 +177,13 @@ class SpacesUploader:
 
         try:
             self.s3_client.delete_object(Bucket=self.bucket, Key=s3_key)
-            print(f"🗑️  Deleted from Spaces: {s3_key}")
+            logger.info(
+                f"Deleted from Spaces: {s3_key}",
+                extra={"operation": "delete"},
+            )
             return True
         except ClientError as e:
-            print(f"❌ Failed to delete from Spaces: {e}")
+            logger.error(f"Failed to delete from Spaces: {e}")
             return False
 
     def list_files(self, source: str, prefix: str = "") -> list:
@@ -204,7 +214,7 @@ class SpacesUploader:
             return [obj["Key"] for obj in response["Contents"]]
 
         except ClientError as e:
-            print(f"❌ Failed to list files from Spaces: {e}")
+            logger.error(f"Failed to list files from Spaces: {e}")
             return []
 
 

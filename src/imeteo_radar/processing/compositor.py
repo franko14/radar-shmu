@@ -13,7 +13,10 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 from ..core.base import lonlat_to_mercator
+from ..core.logging import get_logger
 from ..core.projection import ProjectionHandler
+
+logger = get_logger(__name__)
 
 
 class RadarCompositor:
@@ -92,13 +95,13 @@ class RadarCompositor:
         # DON'T pre-allocate target_points - generate on-demand per tile
         # This saves ~169 MB (22M points × 2 coords × 4 bytes)
 
-        print(
-            f"🎯 Target grid: {self.grid_width}×{self.grid_height} pixels "
+        logger.info(
+            f"Target grid: {self.grid_width}x{self.grid_height} pixels "
             f"@ {self.resolution_m}m resolution"
         )
-        print(
-            f"   Extent: {self.target_extent['west']:.2f}°E to {self.target_extent['east']:.2f}°E, "
-            f"{self.target_extent['south']:.2f}°N to {self.target_extent['north']:.2f}°N"
+        logger.debug(
+            f"   Extent: {self.target_extent['west']:.2f}E to {self.target_extent['east']:.2f}E, "
+            f"{self.target_extent['south']:.2f}N to {self.target_extent['north']:.2f}N"
         )
 
     def _generate_tile_target_points(
@@ -146,7 +149,7 @@ class RadarCompositor:
             True if successfully merged, False otherwise
         """
 
-        print(f"\n📡 Merging {source_name.upper()} data...")
+        logger.info(f"Merging {source_name.upper()} data...", extra={"source": source_name})
 
         try:
             # Extract data
@@ -157,7 +160,7 @@ class RadarCompositor:
             if coordinates is None:
                 cache_key = source_name
                 if cache_key not in self.coordinate_cache:
-                    print("   Generating coordinates from HDF5 metadata...")
+                    logger.debug("   Generating coordinates from HDF5 metadata...")
                     coordinates = self._generate_coordinates_from_metadata(
                         radar_data["dimensions"],
                         radar_data["extent"],
@@ -165,7 +168,7 @@ class RadarCompositor:
                     )
                     self.coordinate_cache[cache_key] = coordinates
                 else:
-                    print("   Using cached coordinates...")
+                    logger.debug("   Using cached coordinates...")
                     coordinates = self.coordinate_cache[cache_key]
 
             # Get source coordinates
@@ -191,7 +194,7 @@ class RadarCompositor:
             # Convert 1D coordinate arrays directly to Web Mercator
             # MEMORY OPTIMIZATION: No 2D meshgrid needed - saves ~500 MB for DWD
             # Mercator x depends only on longitude, y depends only on latitude
-            print(
+            logger.debug(
                 f"   Converting {len(source_lon_1d) + len(source_lat_1d):,} coordinates to Mercator..."
             )
 
@@ -209,17 +212,17 @@ class RadarCompositor:
             total_count = source_data.size
 
             if valid_count == 0:
-                print(f"⚠️  No valid data in {source_name}, skipping")
+                logger.warning(f"No valid data in {source_name}, skipping")
                 return False
 
-            print(
+            logger.debug(
                 f"   Valid pixels: {valid_count:,} / {total_count:,} "
                 f"({100 * valid_count / total_count:.1f}%)"
             )
 
             # Create RegularGridInterpolator with source data
             # Use 'nearest' method to preserve discrete dBZ values and avoid smoothing
-            print("   Creating regular grid interpolator...")
+            logger.debug("   Creating regular grid interpolator...")
             interpolator = RegularGridInterpolator(
                 (source_y_1d, source_x_1d),  # Note: y first (rows), x second (cols)
                 source_data,
@@ -231,7 +234,7 @@ class RadarCompositor:
             # Tile-based processing (1000x1000 pixel tiles)
             # Generates target points on-demand per tile (~4 MB) instead of
             # pre-allocating full 22M points (169 MB)
-            print("   Resampling to target grid (tile-based)...")
+            logger.debug("   Resampling to target grid (tile-based)...")
             tile_size = 1000
             in_bounds_count = 0
             before_count = np.count_nonzero(~np.isnan(self.composite_data))
@@ -268,13 +271,16 @@ class RadarCompositor:
                     del tile_points, tile_interpolated, tile_result, current
 
             if in_bounds_count == 0:
-                print(f"⚠️  No data from {source_name} overlaps target extent, skipping")
+                logger.warning(f"No data from {source_name} overlaps target extent, skipping")
                 return False
 
             after_count = np.count_nonzero(~np.isnan(self.composite_data))
             new_pixels = after_count - before_count
-            print(f"   In-bounds pixels: {in_bounds_count:,}")
-            print(f"   ✅ Merged: +{new_pixels:,} new pixels, total: {after_count:,}")
+            logger.debug(f"   In-bounds pixels: {in_bounds_count:,}")
+            logger.info(
+                f"Merged {source_name.upper()}: +{new_pixels:,} new pixels, total: {after_count:,}",
+                extra={"source": source_name, "new_pixels": new_pixels, "total_pixels": after_count},
+            )
 
             # Track merged sources
             self.sources_merged.append(source_name)
@@ -287,7 +293,7 @@ class RadarCompositor:
             return True
 
         except Exception as e:
-            print(f"❌ Failed to merge {source_name}: {e}")
+            logger.error(f"Failed to merge {source_name}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -315,7 +321,7 @@ class RadarCompositor:
         """
         if projection_info and projection_info.get("type") == "stereographic":
             # DWD: Use projection_handler with REAL HDF5 metadata
-            print("      Using stereographic projection from HDF5...")
+            logger.debug("      Using stereographic projection from HDF5...")
             lons, lats = self.projection_handler.create_dwd_coordinates(
                 shape=dimensions,
                 where_attrs=projection_info["where_attrs"],  # Real HDF5 data
@@ -324,7 +330,7 @@ class RadarCompositor:
             return {"lons": lons, "lats": lats}
         else:
             # SHMU/CHMI: Web Mercator - simple grid from real corner coordinates
-            print("      Using Web Mercator grid from HDF5 corner coordinates...")
+            logger.debug("      Using Web Mercator grid from HDF5 corner coordinates...")
             wgs84 = extent["wgs84"]
             lons = np.linspace(wgs84["west"], wgs84["east"], dimensions[1])
             lats = np.linspace(wgs84["north"], wgs84["south"], dimensions[0])
@@ -413,16 +419,16 @@ def create_composite(
         ... ])
     """
 
-    print("\n" + "=" * 60)
-    print("CREATING RADAR COMPOSITE")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("CREATING RADAR COMPOSITE")
+    logger.info("=" * 60)
 
     if not sources_data:
         raise ValueError("No source data provided")
 
     # Calculate combined extent if not provided
     if custom_extent is None:
-        print("📐 Calculating combined extent from sources...")
+        logger.info("Calculating combined extent from sources...")
 
         all_extents = []
         for _source_name, radar_data in sources_data:
@@ -440,8 +446,8 @@ def create_composite(
             "north": max(ext["north"] for ext in all_extents),
         }
 
-        print(
-            f"   Combined extent: {custom_extent['west']:.2f}° to {custom_extent['east']:.2f}°E, "
+        logger.debug(
+            f"Combined extent: {custom_extent['west']:.2f}° to {custom_extent['east']:.2f}°E, "
             f"{custom_extent['south']:.2f}° to {custom_extent['north']:.2f}°N"
         )
 
@@ -456,8 +462,8 @@ def create_composite(
     # Get final composite
     result = compositor.get_composite()
 
-    # Print summary
-    print(compositor.get_summary())
+    # Log summary
+    logger.info(compositor.get_summary())
 
     # Clear coordinate cache to free memory
     compositor.clear_cache()

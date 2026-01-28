@@ -11,11 +11,34 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .core.logging import get_logger, setup_logging
+
+logger = get_logger(__name__)
+
 
 def create_parser() -> argparse.ArgumentParser:
     """Create command-line argument parser"""
     parser = argparse.ArgumentParser(
         description="Weather radar data processor for DWD", prog="imeteo-radar"
+    )
+
+    # Global logging arguments
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help="Logging level (default: INFO)",
+    )
+    parser.add_argument(
+        "--log-format",
+        choices=["console", "json"],
+        default="console",
+        help="Log output format (default: console)",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        help="Log to file (in addition to console)",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -265,7 +288,7 @@ def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
     with open(extent_file, "w") as f:
         json.dump(extent_data, f, indent=2)
 
-    print(f"💾 Saved extent information to: {extent_file}")
+    logger.info(f"Saved extent information to: {extent_file}")
     return True
 
 
@@ -297,11 +320,11 @@ def cleanup_old_files(output_dir: Path, max_age_hours: int = 6):
                 png_file.unlink()
                 deleted_count += 1
             except Exception as e:
-                print(f"⚠️  Failed to delete {png_file.name}: {e}")
+                logger.warning(f"Failed to delete {png_file.name}: {e}")
 
     if deleted_count > 0:
-        print(
-            f"🗑️  Cleaned up {deleted_count} old PNG files (older than {max_age_hours}h)"
+        logger.info(
+            f"Cleaned up {deleted_count} old PNG files (older than {max_age_hours}h)"
         )
 
 
@@ -317,7 +340,7 @@ def fetch_command(args) -> int:
         # Initialize source using centralized registry
         source_config = get_source_config(args.source)
         if not source_config:
-            print(f"❌ Unknown source: {args.source}")
+            logger.error(f"Unknown source: {args.source}")
             return 1
 
         source = get_source_instance(args.source)
@@ -334,19 +357,19 @@ def fetch_command(args) -> int:
             if is_spaces_configured():
                 try:
                     uploader = SpacesUploader()
-                    print("☁️  DigitalOcean Spaces upload enabled")
+                    logger.info("DigitalOcean Spaces upload enabled")
                 except Exception as e:
-                    print(f"⚠️  Failed to initialize Spaces uploader: {e}")
-                    print("⚠️  Falling back to local-only mode (upload disabled)")
+                    logger.warning(f"Failed to initialize Spaces uploader: {e}")
+                    logger.warning("Falling back to local-only mode (upload disabled)")
                     upload_enabled = False
             else:
-                print(
-                    "⚠️  DigitalOcean Spaces not configured (missing environment variables)"
+                logger.warning(
+                    "DigitalOcean Spaces not configured (missing environment variables)"
                 )
-                print("⚠️  Falling back to local-only mode (upload disabled)")
+                logger.warning("Falling back to local-only mode (upload disabled)")
                 upload_enabled = False
         else:
-            print("📁 Local-only mode (--disable-upload flag used)")
+            logger.info("Local-only mode (--disable-upload flag used)")
 
         # Set output directory based on source
         if not args.output:
@@ -363,15 +386,18 @@ def fetch_command(args) -> int:
             output_dir, extent_info, force=getattr(args, "update_extent", False)
         )
 
-        print(f"📡 Fetching {args.source.upper()} {product} radar data...")
-        print(f"📁 Output directory: {output_dir}")
+        logger.info(
+            f"Fetching {args.source.upper()} {product} radar data...",
+            extra={"source": args.source, "product": product},
+        )
+        logger.info(f"Output directory: {output_dir}")
 
         if args.backload:
             # Handle backload
             start, end = parse_time_range(args.from_time, args.to_time, args.hours)
 
-            print(
-                f"⏰ Backload period: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}"
+            logger.info(
+                f"Backload period: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}"
             )
 
             # Calculate number of 5-minute intervals
@@ -381,7 +407,7 @@ def fetch_command(args) -> int:
             # Limit to reasonable number
             intervals = min(intervals, 100)  # Max 100 files
 
-            print(f"📥 Downloading up to {intervals} timestamps...")
+            logger.info(f"Downloading up to {intervals} timestamps...")
 
             # Download data (don't use LATEST for backload)
             if args.source == "dwd":
@@ -398,10 +424,10 @@ def fetch_command(args) -> int:
                 )
 
             if not files:
-                print("❌ No data available for the specified period")
+                logger.error("No data available for the specified period")
                 return 1
 
-            print(f"✅ Downloaded {len(files)} files")
+            logger.info(f"Downloaded {len(files)} files", extra={"count": len(files)})
 
             # Process each file to PNG
             processed_count = 0
@@ -436,7 +462,7 @@ def fetch_command(args) -> int:
                         colormap_type="reflectivity_shmu",  # Use SHMU colormap for consistency
                     )
 
-                    print(f"💾 Saved: {output_path}")
+                    logger.info(f"Saved: {output_path}")
                     processed_count += 1
 
                     # Upload to DigitalOcean Spaces if enabled
@@ -452,11 +478,14 @@ def fetch_command(args) -> int:
                     gc.collect()
 
                 except Exception as e:
-                    print(f"⚠️  Failed to process {file_info['timestamp']}: {e}")
+                    logger.warning(f"Failed to process {file_info['timestamp']}: {e}")
                     continue
 
             # Summary
-            print(f"✅ Summary: Processed {processed_count} files")
+            logger.info(
+                f"Summary: Processed {processed_count} files",
+                extra={"count": processed_count},
+            )
 
             # Clean up temporary files after backload
             source.cleanup_temp_files()
@@ -466,7 +495,7 @@ def fetch_command(args) -> int:
 
         else:
             # Just fetch latest using LATEST endpoint
-            print("📥 Downloading latest timestamp...")
+            logger.info("Downloading latest timestamp...")
 
             if args.source == "dwd":
                 files = source.download_latest(
@@ -476,7 +505,7 @@ def fetch_command(args) -> int:
                 files = source.download_latest(count=1, products=[product])
 
             if not files:
-                print("❌ No data available")
+                logger.error("No data available")
                 return 1
 
             file_info = files[0]
@@ -509,7 +538,7 @@ def fetch_command(args) -> int:
                 colormap_type="reflectivity_shmu",
             )
 
-            print(f"✅ Saved: {output_path}")
+            logger.info(f"Saved: {output_path}")
 
             # Upload to DigitalOcean Spaces if enabled
             if upload_enabled and uploader:
@@ -524,11 +553,11 @@ def fetch_command(args) -> int:
         return 0
 
     except ImportError as e:
-        print(f"❌ Import error: {e}")
-        print("Please ensure the package is properly installed with: pip install -e .")
+        logger.error(f"Import error: {e}")
+        logger.error("Please ensure the package is properly installed with: pip install -e .")
         return 1
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"Error: {e}")
         # Try to clean up if source exists
         try:
             if "source" in locals():
@@ -547,6 +576,14 @@ def main():
         parser.print_help()
         return 1
 
+    # Initialize logging based on CLI arguments
+    log_file = str(args.log_file) if args.log_file else None
+    setup_logging(
+        level=args.log_level,
+        structured=(args.log_format == "json"),
+        log_file=log_file,
+    )
+
     try:
         if args.command == "fetch":
             return fetch_command(args)
@@ -557,14 +594,14 @@ def main():
         elif args.command == "coverage-mask":
             return coverage_mask_command(args)
         else:
-            print(f"Unknown command: {args.command}")
+            logger.error(f"Unknown command: {args.command}")
             return 1
 
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user")
+        logger.warning("Operation cancelled by user")
         return 1
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         return 1
 
 
@@ -604,7 +641,10 @@ def extent_command(args) -> int:
         }
 
         for source_name, source_obj, country_dir in sources_to_process:
-            print(f"📡 Generating extent for {source_name.upper()}...")
+            logger.info(
+                f"Generating extent for {source_name.upper()}...",
+                extra={"source": source_name},
+            )
 
             # Get extent information
             extent_info = generate_extent_info(
@@ -625,18 +665,24 @@ def extent_command(args) -> int:
 
         # If processing all sources, save combined file
         if args.source == "all":
-            combined_file = Path("/tmp/radar_extent_combined.json")
+            if args.output:
+                output_dir = args.output
+            else:
+                output_dir = Path("composite")
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            combined_file = output_dir / "extent_index.json"
             with open(combined_file, "w") as f:
                 json.dump(combined_extent, f, indent=2)
-            print(f"💾 Saved combined extent to: {combined_file}")
+            logger.info(f"Saved combined extent to: {combined_file}")
 
         return 0
 
     except ImportError as e:
-        print(f"❌ Import error: {e}")
+        logger.error(f"Import error: {e}")
         return 1
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"Error: {e}")
         return 1
 
 
@@ -681,7 +727,7 @@ def coverage_mask_command(args) -> int:
             # Generate single source mask
             config = get_source_config(args.source)
             if not config:
-                print(f"❌ Unknown source: {args.source}")
+                logger.error(f"Unknown source: {args.source}")
                 return 1
 
             folder = config["folder"]
@@ -690,10 +736,10 @@ def coverage_mask_command(args) -> int:
             return 0 if result else 1
 
     except ImportError as e:
-        print(f"❌ Import error: {e}")
+        logger.error(f"Import error: {e}")
         return 1
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"Error: {e}")
         import traceback
 
         traceback.print_exc()

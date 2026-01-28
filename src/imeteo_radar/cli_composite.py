@@ -9,6 +9,10 @@ import gc
 from pathlib import Path
 from typing import Any
 
+from .core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def composite_command_impl(args: Any) -> int:
     """Handle composite generation command"""
@@ -23,12 +27,12 @@ def composite_command_impl(args: Any) -> int:
 
         # Parse sources list
         source_names = [s.strip() for s in args.sources.split(",")]
-        print(f"🎯 Creating composite from sources: {', '.join(source_names).upper()}")
+        logger.info(f"Creating composite from sources: {', '.join(source_names).upper()}")
 
         # Create output directory
         output_dir = args.output
         output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"📁 Output directory: {output_dir}")
+        logger.info(f"Output directory: {output_dir}")
 
         # Initialize sources
         sources = {}
@@ -46,7 +50,7 @@ def composite_command_impl(args: Any) -> int:
             elif source_name == "imgw":
                 sources["imgw"] = (IMGWRadarSource(), "cmax")
             else:
-                print(f"❌ Unknown source: {source_name}")
+                logger.error(f"Unknown source: {source_name}")
                 return 1
 
         # Initialize PNG exporter
@@ -61,10 +65,10 @@ def composite_command_impl(args: Any) -> int:
             return _process_latest(args, sources, exporter, output_dir)
 
     except KeyboardInterrupt:
-        print("\n❌ Interrupted by user")
+        logger.warning("Interrupted by user")
         return 1
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"Error: {e}")
         import traceback
 
         traceback.print_exc()
@@ -123,10 +127,10 @@ def _find_common_timestamp_with_tolerance(
 
         # Check if all sources present
         if len(sources_in_window) == len(sources):
-            print(f"✅ Found common time window around {candidate_ts}")
+            logger.info(f"Found common time window around {candidate_ts}")
             for src, (ts, _, dt) in sources_in_window.items():
                 offset = (dt - candidate_dt).total_seconds() / 60
-                print(f"   {src.upper()}: {ts} (offset: {offset:+.1f} min)")
+                logger.debug(f"   {src.upper()}: {ts} (offset: {offset:+.1f} min)")
 
             return candidate_ts, {
                 src: info for src, (_, info, _) in sources_in_window.items()
@@ -139,8 +143,8 @@ def _process_latest(args, sources, exporter, output_dir):
     """Process latest available data from all sources - MEMORY OPTIMIZED TWO-PASS VERSION
 
     TWO-PASS ARCHITECTURE for ~75% memory reduction:
-    - Pass 1: Extract extents only (no data loading) → Calculate combined extent
-    - Pass 2: Process each source sequentially: Load → Export individual → Merge → Delete
+    - Pass 1: Extract extents only (no data loading) -> Calculate combined extent
+    - Pass 2: Process each source sequentially: Load -> Export individual -> Merge -> Delete
 
     Ensures all sources have data for the SAME timestamp before creating composite.
     Also exports individual source images with their native extents.
@@ -151,12 +155,12 @@ def _process_latest(args, sources, exporter, output_dir):
 
     from .processing.compositor import RadarCompositor
 
-    print("\n🔍 Finding common timestamp across all sources...")
+    logger.info("Finding common timestamp across all sources...")
 
     # Step 1: Download recent timestamps from each source (get more to find overlap)
     all_source_files = {}
     for source_name, (source, product) in sources.items():
-        print(f"\n📥 Checking {source_name.upper()} recent timestamps...")
+        logger.info(f"Checking {source_name.upper()} recent timestamps...")
         files = source.download_latest(
             count=4, products=[product]
         )  # Get last 4 to find overlap (reduced from 10 to save memory)
@@ -164,15 +168,16 @@ def _process_latest(args, sources, exporter, output_dir):
         if files:
             all_source_files[source_name] = files
             timestamps = [f["timestamp"] for f in files[:3]]  # Show first 3
-            print(
-                f"✅ Found {len(files)} timestamps (recent: {', '.join(timestamps)}...)"
+            logger.info(
+                f"Found {len(files)} timestamps (recent: {', '.join(timestamps)}...)",
+                extra={"source": source_name, "count": len(files)},
             )
         else:
-            print(f"❌ No data from {source_name.upper()}")
+            logger.error(f"No data from {source_name.upper()}")
             return 1
 
     # Step 2: Find most recent timestamp that ALL sources have
-    print("\n🔍 Finding common timestamp...")
+    logger.info("Finding common timestamp...")
 
     # Group files by timestamp
     timestamp_groups = {}
@@ -194,8 +199,8 @@ def _process_latest(args, sources, exporter, output_dir):
         # ARSO only provides latest data, so timing mismatches are common
         require_arso = getattr(args, "require_arso", False)
         if "arso" in sources and len(sources) > 2 and not require_arso:
-            print("⚠️  No common timestamp with ARSO, retrying without ARSO...")
-            print("   (ARSO only provides single latest timestamp)")
+            logger.warning("No common timestamp with ARSO, retrying without ARSO...")
+            logger.info("   (ARSO only provides single latest timestamp)")
 
             # Remove ARSO from sources and timestamp groups
             del sources["arso"]
@@ -217,23 +222,23 @@ def _process_latest(args, sources, exporter, output_dir):
             )
 
             if not common_timestamp:
-                print("❌ No common timestamp found even without ARSO")
-                print(f"   Timestamp tolerance: {tolerance} minutes")
-                print(
-                    "\n💡 Try again in a few minutes or increase --timestamp-tolerance"
+                logger.error("No common timestamp found even without ARSO")
+                logger.info(f"   Timestamp tolerance: {tolerance} minutes")
+                logger.info(
+                    "Try again in a few minutes or increase --timestamp-tolerance"
                 )
                 return 1
         else:
-            print("❌ No common timestamp found across all sources")
-            print(f"   Timestamp tolerance: {tolerance} minutes")
-            print("\nAvailable timestamps by source:")
+            logger.error("No common timestamp found across all sources")
+            logger.info(f"   Timestamp tolerance: {tolerance} minutes")
+            logger.info("Available timestamps by source:")
             for source_name in sources.keys():
                 if source_name in all_source_files and all_source_files[source_name]:
                     timestamps = [
                         f["timestamp"] for f in all_source_files[source_name][:3]
                     ]
-                    print(f"   {source_name.upper()}: {', '.join(timestamps)}")
-            print("\n💡 Try again in a few minutes or increase --timestamp-tolerance")
+                    logger.info(f"   {source_name.upper()}: {', '.join(timestamps)}")
+            logger.info("Try again in a few minutes or increase --timestamp-tolerance")
             return 1
 
     # Parse timestamp for filename generation
@@ -243,11 +248,11 @@ def _process_latest(args, sources, exporter, output_dir):
 
     # Process data from matched sources
     if not source_files:
-        print("❌ No source files matched (internal error)")
+        logger.error("No source files matched (internal error)")
         return 1
 
     # ========== PASS 1: EXTRACT EXTENTS ONLY (NO DATA LOADING) ==========
-    print("\n📐 Pass 1: Extracting extents only (memory-efficient)...")
+    logger.info("Pass 1: Extracting extents only (memory-efficient)...")
     all_extents = []
     source_metadata = {}
 
@@ -261,9 +266,9 @@ def _process_latest(args, sources, exporter, output_dir):
                 "file_path": file_info["path"],
                 "dimensions": extent_info["dimensions"],
             }
-            print(f"   ✅ {source_name.upper()}: extent extracted")
+            logger.debug(f"   {source_name.upper()}: extent extracted")
         except Exception as e:
-            print(f"❌ Failed to extract extent from {source_name}: {e}")
+            logger.error(f"Failed to extract extent from {source_name}: {e}")
             return 1
 
     # Calculate combined extent from all sources
@@ -273,13 +278,13 @@ def _process_latest(args, sources, exporter, output_dir):
         "south": min(ext["south"] for ext in all_extents),
         "north": max(ext["north"] for ext in all_extents),
     }
-    print(
-        f"   📊 Combined extent: {combined_extent['west']:.2f}°E to {combined_extent['east']:.2f}°E, "
-        f"{combined_extent['south']:.2f}°N to {combined_extent['north']:.2f}°N"
+    logger.info(
+        f"Combined extent: {combined_extent['west']:.2f}E to {combined_extent['east']:.2f}E, "
+        f"{combined_extent['south']:.2f}N to {combined_extent['north']:.2f}N"
     )
 
     # ========== PASS 2: SEQUENTIAL PROCESSING (ONE SOURCE AT A TIME) ==========
-    print("\n📡 Pass 2: Processing sources sequentially (memory-optimized)...")
+    logger.info("Pass 2: Processing sources sequentially (memory-optimized)...")
 
     # Create compositor with pre-computed combined extent
     compositor = RadarCompositor(combined_extent, resolution_m=args.resolution)
@@ -290,7 +295,7 @@ def _process_latest(args, sources, exporter, output_dir):
 
         try:
             # Load ONE source at a time
-            print(f"\n   🔄 Loading {source_name.upper()}...")
+            logger.info(f"Loading {source_name.upper()}...", extra={"source": source_name})
             radar_data = source.process_to_array(file_path)
 
             # Export individual source image if requested
@@ -319,14 +324,14 @@ def _process_latest(args, sources, exporter, output_dir):
             except Exception:
                 pass
 
-            print(f"   ✅ {source_name.upper()}: processed and merged")
+            logger.info(f"{source_name.upper()}: processed and merged")
 
         except Exception as e:
-            print(f"❌ Failed to process {source_name}: {e}")
+            logger.error(f"Failed to process {source_name}: {e}")
             return 1
 
     # Get final composite
-    print("\n🎨 Finalizing composite...")
+    logger.info("Finalizing composite...")
     composite = compositor.get_composite()
 
     # Generate output filename
@@ -334,7 +339,7 @@ def _process_latest(args, sources, exporter, output_dir):
     output_path = output_dir / filename
 
     # Export composite to PNG
-    print(f"\n💾 Exporting composite to {filename} (timestamp: {common_timestamp})...")
+    logger.info(f"Exporting composite to {filename} (timestamp: {common_timestamp})...")
     radar_data_for_export = {
         "data": composite["data"],
         "timestamp": common_timestamp,
@@ -349,8 +354,8 @@ def _process_latest(args, sources, exporter, output_dir):
         colormap_type="shmu",
     )
 
-    print(f"✅ Composite saved to {output_path}")
-    print(f"   Data timestamp: {common_timestamp} (Unix: {unix_timestamp})")
+    logger.info(f"Composite saved to {output_path}")
+    logger.debug(f"   Data timestamp: {common_timestamp} (Unix: {unix_timestamp})")
 
     # Update extent index if requested
     if args.update_extent or not (output_dir / "extent_index.json").exists():
@@ -406,7 +411,7 @@ def _export_individual_sources(
         # Get output directory for this source
         source_output_dir = source_dirs.get(source_name)
         if source_output_dir is None:
-            print(f"⚠️  Unknown source {source_name}, skipping individual export")
+            logger.warning(f"Unknown source {source_name}, skipping individual export")
             continue
 
         # Create output directory
@@ -427,7 +432,7 @@ def _export_individual_sources(
         }
 
         # Export to PNG with native extent
-        print(f"   💾 {source_name.upper()} -> {output_path}")
+        logger.info(f"{source_name.upper()} -> {output_path}")
         exporter.export_png_fast(
             radar_data=radar_data_for_export,
             output_path=output_path,
@@ -448,7 +453,7 @@ def _export_individual_sources(
             }
             with open(extent_file, "w") as f:
                 json.dump(extent_data, f, indent=2)
-            print(f"   📐 Saved extent to {extent_file}")
+            logger.info(f"Saved extent to {extent_file}")
 
 
 def _export_single_source(
@@ -500,7 +505,7 @@ def _export_single_source(
     }
 
     # Export to PNG with native extent
-    print(f"      💾 {source_name.upper()} -> {output_path}")
+    logger.debug(f"{source_name.upper()} -> {output_path}")
     exporter.export_png_fast(
         radar_data=radar_data_for_export,
         output_path=output_path,
@@ -527,8 +532,8 @@ def _process_backload(args, sources, exporter, output_dir):
     """Process historical data from all sources - MEMORY OPTIMIZED TWO-PASS VERSION
 
     TWO-PASS ARCHITECTURE for ~75% memory reduction:
-    - Pass 1: Extract extents only (no data loading) → Calculate combined extent
-    - Pass 2: Process each source sequentially: Load → Export individual → Merge → Delete
+    - Pass 1: Extract extents only (no data loading) -> Calculate combined extent
+    - Pass 2: Process each source sequentially: Load -> Export individual -> Merge -> Delete
     """
     import gc
     from datetime import datetime as dt
@@ -539,36 +544,39 @@ def _process_backload(args, sources, exporter, output_dir):
     from .processing.compositor import RadarCompositor
 
     start, end = parse_time_range(args.from_time, args.to_time, args.hours)
-    print(
-        f"\n📅 Backload mode: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}"
+    logger.info(
+        f"Backload mode: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}"
     )
 
     # Calculate number of 5-minute intervals
     time_diff = end - start
     intervals = int(time_diff.total_seconds() / 300) + 1  # 300 seconds = 5 minutes
-    print(f"   Expected intervals: {intervals}")
+    logger.info(f"Expected intervals: {intervals}")
 
     # Remove ARSO from sources for backload mode (no historical data available)
     if "arso" in sources:
-        print("\n⚠️  Excluding ARSO from backload mode (no historical data available)")
-        print("   ARSO only provides latest data")
+        logger.warning("Excluding ARSO from backload mode (no historical data available)")
+        logger.info("   ARSO only provides latest data")
         del sources["arso"]
 
     # Download data from all sources for the time range
     all_source_files = {}
     for source_name, (source, product) in sources.items():
-        print(f"\n🌐 Downloading {source_name.upper()} data...")
+        logger.info(f"Downloading {source_name.upper()} data...", extra={"source": source_name})
         files = source.download_latest(
             count=intervals, products=[product], start_time=start, end_time=end
         )
         if files:
             all_source_files[source_name] = files
-            print(f"✅ Downloaded {len(files)} files from {source_name.upper()}")
+            logger.info(
+                f"Downloaded {len(files)} files from {source_name.upper()}",
+                extra={"source": source_name, "count": len(files)},
+            )
         else:
-            print(f"⚠️  No data from {source_name.upper()}")
+            logger.warning(f"No data from {source_name.upper()}")
 
     if not all_source_files:
-        print("❌ No data downloaded from any source")
+        logger.error("No data downloaded from any source")
         return 1
 
     # Group files by timestamp
@@ -580,7 +588,7 @@ def _process_backload(args, sources, exporter, output_dir):
                 timestamp_groups[timestamp] = {}
             timestamp_groups[timestamp][source_name] = file_info
 
-    print(f"\n📊 Found {len(timestamp_groups)} unique timestamps")
+    logger.info(f"Found {len(timestamp_groups)} unique timestamps")
 
     # Process each timestamp with two-pass architecture
     processed_count = 0
@@ -592,10 +600,10 @@ def _process_backload(args, sources, exporter, output_dir):
         # Skip if not all sources have data for this timestamp
         if len(source_files) < len(sources):
             missing = set(sources.keys()) - set(source_files.keys())
-            print(f"\n⏭️  Skipping {timestamp} (missing: {', '.join(missing).upper()})")
+            logger.debug(f"Skipping {timestamp} (missing: {', '.join(missing).upper()})")
             continue
 
-        print(f"\n📡 Processing {timestamp}...")
+        logger.info(f"Processing {timestamp}...")
 
         # Generate Unix timestamp for filenames
         dt_obj = dt.strptime(timestamp, "%Y%m%d%H%M%S")
@@ -603,7 +611,7 @@ def _process_backload(args, sources, exporter, output_dir):
         unix_timestamp = int(dt_obj.timestamp())
 
         # ========== PASS 1: EXTRACT EXTENTS ONLY ==========
-        print("   📐 Pass 1: Extracting extents...")
+        logger.debug("   Pass 1: Extracting extents...")
         all_extents = []
         source_metadata = {}
 
@@ -614,11 +622,11 @@ def _process_backload(args, sources, exporter, output_dir):
                 all_extents.append(extent_info["extent"]["wgs84"])
                 source_metadata[source_name] = {"file_path": file_info["path"]}
             except Exception as e:
-                print(f"   ⚠️  Failed to extract extent from {source_name}: {e}")
+                logger.warning(f"Failed to extract extent from {source_name}: {e}")
                 continue
 
         if len(all_extents) < 2:
-            print("   ⚠️  Not enough valid extents for composite, skipping")
+            logger.warning("Not enough valid extents for composite, skipping")
             continue
 
         # Calculate combined extent
@@ -630,7 +638,7 @@ def _process_backload(args, sources, exporter, output_dir):
         }
 
         # ========== PASS 2: SEQUENTIAL PROCESSING ==========
-        print("   📡 Pass 2: Processing sources sequentially...")
+        logger.debug("   Pass 2: Processing sources sequentially...")
         compositor = RadarCompositor(combined_extent, resolution_m=args.resolution)
         sources_processed = 0
 
@@ -668,10 +676,10 @@ def _process_backload(args, sources, exporter, output_dir):
                     pass
 
             except Exception as e:
-                print(f"   ⚠️  Failed to process {source_name}: {e}")
+                logger.warning(f"Failed to process {source_name}: {e}")
 
         if sources_processed < 2:
-            print("   ⚠️  Not enough valid sources for composite, skipping")
+            logger.warning("Not enough valid sources for composite, skipping")
             compositor.clear_cache()
             del compositor
             gc.collect()
@@ -684,7 +692,7 @@ def _process_backload(args, sources, exporter, output_dir):
             filename = f"{unix_timestamp}.png"
             output_path = output_dir / filename
 
-            print(f"   💾 Exporting composite to {filename}...")
+            logger.info(f"Exporting composite to {filename}...")
             radar_data_for_export = {
                 "data": composite["data"],
                 "timestamp": timestamp,
@@ -711,12 +719,12 @@ def _process_backload(args, sources, exporter, output_dir):
             gc.collect()
 
         except Exception as e:
-            print(f"   ❌ Failed to create composite: {e}")
+            logger.error(f"Failed to create composite: {e}")
             import traceback
 
             traceback.print_exc()
 
-    print(f"\n✅ Processed {processed_count} composites")
+    logger.info(f"Processed {processed_count} composites", extra={"count": processed_count})
 
     # Update extent index if requested
     if args.update_extent or processed_count > 0:
@@ -733,7 +741,7 @@ def _save_extent_index(output_dir, composite, source_names, resolution):
     import json
     from datetime import datetime
 
-    print("\n📐 Generating extent information...")
+    logger.info("Generating extent information...")
 
     extent_data = {
         "metadata": {
@@ -750,4 +758,4 @@ def _save_extent_index(output_dir, composite, source_names, resolution):
     with open(extent_path, "w") as f:
         json.dump(extent_data, f, indent=2)
 
-    print(f"✅ Extent info saved to {extent_path}")
+    logger.info(f"Extent info saved to {extent_path}")

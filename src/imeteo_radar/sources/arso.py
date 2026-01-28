@@ -20,6 +20,9 @@ import requests
 from pyproj import CRS, Transformer
 
 from ..core.base import RadarSource, lonlat_to_mercator
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ARSORadarSource(RadarSource):
@@ -187,7 +190,7 @@ class ARSORadarSource(RadarSource):
         # Check if we have enough data
         expected_size = width * height
         if len(raw_array) < expected_size:
-            print(f"Warning: Expected {expected_size} values, got {len(raw_array)}")
+            logger.warning(f"Expected {expected_size} values, got {len(raw_array)}", extra={"source": "arso"})
             # Pad with nodata
             raw_array = np.pad(
                 raw_array, (0, expected_size - len(raw_array)), constant_values=offset
@@ -325,11 +328,11 @@ class ARSORadarSource(RadarSource):
         if products is None:
             products = ["zm"]  # Default to max reflectivity
 
-        print(f"📡 Downloading ARSO radar data ({', '.join(products)})...")
+        logger.info(f"Downloading ARSO radar data ({', '.join(products)})...", extra={"source": "arso"})
 
         # Note: ARSO doesn't provide historical data via public URL
         if count > 1 or start_time or end_time:
-            print("⚠️  ARSO only provides latest data (no archive access)")
+            logger.warning("ARSO only provides latest data (no archive access)", extra={"source": "arso"})
 
         downloaded_files = []
 
@@ -349,20 +352,21 @@ class ARSORadarSource(RadarSource):
                         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M00")
                     result["timestamp"] = timestamp
                 except Exception as e:
-                    print(f"⚠️  Could not parse timestamp: {e}")
+                    logger.warning(f"Could not parse timestamp: {e}", extra={"source": "arso"})
                     result["timestamp"] = datetime.utcnow().strftime("%Y%m%d%H%M00")
 
                 downloaded_files.append(result)
                 if result["cached"]:
-                    print(f"📁 Using cached: {product}")
+                    logger.debug(f"Using cached: {product}", extra={"source": "arso"})
                 else:
-                    print(
-                        f"✅ Downloaded: {product} (timestamp: {result['timestamp']})"
+                    logger.info(
+                        f"Downloaded: {product} (timestamp: {result['timestamp']})",
+                        extra={"source": "arso"},
                     )
             else:
-                print(f"❌ Failed {product}: {result.get('error', 'Unknown error')}")
+                logger.error(f"Failed {product}: {result.get('error', 'Unknown error')}", extra={"source": "arso"})
 
-        print(f"📋 ARSO: Downloaded {len(downloaded_files)} files")
+        logger.info(f"ARSO: Downloaded {len(downloaded_files)} files", extra={"source": "arso", "count": len(downloaded_files)})
         return downloaded_files
 
     def process_to_array(self, file_path: str) -> dict[str, Any]:

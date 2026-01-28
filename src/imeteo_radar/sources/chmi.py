@@ -20,6 +20,9 @@ from ..core.base import (
     extract_hdf5_corner_extent,
     lonlat_to_mercator,
 )
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class CHMIRadarSource(RadarSource):
@@ -215,10 +218,10 @@ class CHMIRadarSource(RadarSource):
         if products is None:
             products = ["maxz"]  # Default product
 
-        print(f"🔍 Finding last {count} available CHMI timestamps...")
+        logger.info(f"Finding last {count} available CHMI timestamps...", extra={"source": "chmi"})
 
         # Strategy: Check for current timestamps online
-        print("🌐 Checking CHMI server for current timestamps...")
+        logger.info("Checking CHMI server for current timestamps...", extra={"source": "chmi"})
 
         # Generate more timestamps if we're filtering by time range
         multiplier = 8 if (start_time and end_time) else 4
@@ -229,8 +232,9 @@ class CHMIRadarSource(RadarSource):
             test_timestamps = self._filter_timestamps_by_range(
                 test_timestamps, start_time, end_time
             )
-            print(
-                f"📅 Filtered timestamps to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}"
+            logger.info(
+                f"Filtered timestamps to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}",
+                extra={"source": "chmi"},
             )
 
         available_timestamps = []
@@ -242,14 +246,15 @@ class CHMIRadarSource(RadarSource):
             # Test with maxz (only product)
             if self._check_timestamp_availability(timestamp, "maxz"):
                 available_timestamps.append(timestamp)
-                print(f"✅ Found current: {timestamp}")
+                logger.info(f"Found current: {timestamp}", extra={"source": "chmi"})
 
         if not available_timestamps:
-            print("❌ No available timestamps found")
+            logger.warning("No available timestamps found", extra={"source": "chmi"})
             return []
 
-        print(
-            f"📥 Downloading {len(available_timestamps)} timestamps × {len(products)} products..."
+        logger.info(
+            f"Downloading {len(available_timestamps)} timestamps × {len(products)} products...",
+            extra={"source": "chmi"},
         )
 
         # Create download tasks
@@ -258,8 +263,9 @@ class CHMIRadarSource(RadarSource):
             for product in products:
                 download_tasks.append((timestamp, product))
 
-        print(
-            f"📥 Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)..."
+        logger.info(
+            f"Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)...",
+            extra={"source": "chmi"},
         )
 
         # Execute downloads in parallel
@@ -282,18 +288,20 @@ class CHMIRadarSource(RadarSource):
                     if result["success"]:
                         downloaded_files.append(result)
                         if result["cached"]:
-                            print(f"📁 Using cached: {product} {timestamp}")
+                            logger.debug(f"Using cached: {product} {timestamp}", extra={"source": "chmi"})
                         else:
-                            print(f"✅ Downloaded: {product} {timestamp}")
+                            logger.info(f"Downloaded: {product} {timestamp}", extra={"source": "chmi"})
                     else:
-                        print(
-                            f"❌ Failed {product} {timestamp}: {result.get('error', 'Unknown error')}"
+                        logger.error(
+                            f"Failed {product} {timestamp}: {result.get('error', 'Unknown error')}",
+                            extra={"source": "chmi"},
                         )
                 except Exception as e:
-                    print(f"❌ Exception {product} {timestamp}: {e}")
+                    logger.error(f"Exception {product} {timestamp}: {e}", extra={"source": "chmi"})
 
-        print(
-            f"📋 CHMI: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)"
+        logger.info(
+            f"CHMI: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)",
+            extra={"source": "chmi", "count": len(downloaded_files)},
         )
         return downloaded_files
 
@@ -345,8 +353,9 @@ class CHMIRadarSource(RadarSource):
                     ur_lat = float(where_attrs["UR_lat"])
                 else:
                     # Fallback: approximate Czech coverage
-                    print(
-                        "⚠️  Corner coordinates not found in HDF5, using approximate extent"
+                    logger.warning(
+                        "Corner coordinates not found in HDF5, using approximate extent",
+                        extra={"source": "chmi"},
                     )
                     ll_lon, ll_lat = 12.0, 48.5
                     ur_lon, ur_lat = 19.0, 51.1

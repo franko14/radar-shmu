@@ -23,6 +23,9 @@ from ..config.sources import (
     get_source_instance,
 )
 from ..core.base import lonlat_to_mercator
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Coverage mask color for uncovered areas
 UNCOVERED_COLOR = (128, 128, 128, 255)  # Gray, fully opaque
@@ -35,6 +38,7 @@ NODATA_VALUES: dict[str, int] = {
     "chmi": 255,  # uint8 max
     "arso": 64,  # offset byte (ASCII '@')
     "omsz": 255,  # uint8 representation of outside coverage
+    "imgw": 255,  # uint8 max (CMAX product)
 }
 
 # Source extents in WGS84 (for composite calculation)
@@ -49,6 +53,7 @@ SOURCE_EXTENTS: dict[str, dict[str, float]] = {
         "north": 47.414912,
     },
     "omsz": {"west": 13.5, "east": 25.5, "south": 44.0, "north": 50.5},
+    "imgw": {"west": 14.0, "east": 24.1, "south": 49.0, "north": 54.8},
 }
 
 
@@ -261,7 +266,10 @@ def get_coverage_from_source(source_name: str) -> np.ndarray | None:
         Boolean array where True = covered, False = not covered
     """
     source_name = source_name.lower()
-    print(f"   Downloading latest {source_name.upper()} radar file...")
+    logger.info(
+        f"Downloading latest {source_name} radar file...",
+        extra={"source": source_name, "operation": "download"},
+    )
 
     try:
         source = get_source_instance(source_name)
@@ -275,11 +283,17 @@ def get_coverage_from_source(source_name: str) -> np.ndarray | None:
             files = source.download_latest(count=1, products=[product])
 
         if not files:
-            print(f"   ⚠️  No data available for {source_name.upper()}")
+            logger.warning(
+                f"No data available for {source_name}",
+                extra={"source": source_name},
+            )
             return None
 
         file_path = files[0]["path"]
-        print(f"   Reading raw data from: {os.path.basename(file_path)}")
+        logger.debug(
+            f"Reading raw data from: {os.path.basename(file_path)}",
+            extra={"source": source_name},
+        )
 
         # Read raw data based on source type
         if source_name == "omsz":
@@ -295,15 +309,19 @@ def get_coverage_from_source(source_name: str) -> np.ndarray | None:
         # Clean up
         source.cleanup_temp_files()
 
-        print(
-            f"   Coverage: {np.sum(coverage):,} / {coverage.size:,} pixels "
-            f"({100 * np.sum(coverage) / coverage.size:.1f}%)"
+        logger.debug(
+            f"Coverage: {np.sum(coverage):,} / {coverage.size:,} pixels "
+            f"({100 * np.sum(coverage) / coverage.size:.1f}%)",
+            extra={"source": source_name},
         )
 
         return coverage
 
     except Exception as e:
-        print(f"   ❌ Error getting coverage for {source_name}: {e}")
+        logger.error(
+            f"Error getting coverage for {source_name}: {e}",
+            extra={"source": source_name},
+        )
         import traceback
 
         traceback.print_exc()
@@ -344,13 +362,17 @@ def generate_source_coverage_mask(
     """
     source_name = source_name.lower()
 
-    print(f"📐 Generating coverage mask for {source_name.upper()}...")
+    logger.info(
+        f"Generating coverage mask for {source_name}...",
+        extra={"source": source_name, "operation": "generate"},
+    )
 
     # Try to get target dimensions from existing radar PNGs in output directory
     target_shape = _get_target_dimensions_from_pngs(output_dir)
     if target_shape:
-        print(
-            f"   Target dimensions from existing PNGs: {target_shape[1]}×{target_shape[0]}"
+        logger.debug(
+            f"Target dimensions from existing PNGs: {target_shape[1]}×{target_shape[0]}",
+            extra={"source": source_name},
         )
 
     # Get coverage from actual radar data
@@ -358,19 +380,31 @@ def generate_source_coverage_mask(
     if coverage is None:
         return None
 
-    print(f"   Source data dimensions: {coverage.shape[1]}×{coverage.shape[0]} pixels")
+    logger.debug(
+        f"Source data dimensions: {coverage.shape[1]}×{coverage.shape[0]} pixels",
+        extra={"source": source_name},
+    )
 
     # Resize to match target dimensions if specified and different
     if target_shape and coverage.shape != target_shape:
-        print(f"   Resizing to match target: {target_shape[1]}×{target_shape[0]}")
+        logger.debug(
+            f"Resizing to match target: {target_shape[1]}×{target_shape[0]}",
+            extra={"source": source_name},
+        )
         coverage = _resize_coverage_to_target(coverage, target_shape)
 
-    print(f"   Final mask dimensions: {coverage.shape[1]}×{coverage.shape[0]} pixels")
+    logger.debug(
+        f"Final mask dimensions: {coverage.shape[1]}×{coverage.shape[0]} pixels",
+        extra={"source": source_name},
+    )
 
     # Save coverage mask PNG
     output_path = os.path.join(output_dir, filename)
     _save_coverage_mask_png(coverage, output_path)
-    print(f"   ✅ Saved: {output_path}")
+    logger.info(
+        f"Saved: {output_path}",
+        extra={"source": source_name, "operation": "save"},
+    )
 
     return output_path
 
@@ -470,14 +504,19 @@ def generate_composite_coverage_mask(
     if sources is None:
         sources = get_all_source_names()
 
-    print("📐 Generating composite coverage mask...")
-    print(f"   Sources: {', '.join(s.upper() for s in sources)}")
+    logger.info(
+        f"Generating composite coverage mask...",
+        extra={"operation": "generate"},
+    )
+    logger.debug(
+        f"Sources: {', '.join(s for s in sources)}",
+    )
 
     # First, try to get dimensions from existing composite PNGs
     target_shape = _get_target_dimensions_from_pngs(output_dir)
     if target_shape:
-        print(
-            f"   Target dimensions from existing PNGs: {target_shape[1]}×{target_shape[0]}"
+        logger.debug(
+            f"Target dimensions from existing PNGs: {target_shape[1]}×{target_shape[0]}",
         )
 
     # Try to load extent_index.json for extent and resolution
@@ -491,14 +530,18 @@ def generate_composite_coverage_mask(
         combined_extent = extent_info.get("extent")
         metadata = extent_info.get("metadata", {})
         resolution_m = metadata.get("resolution_m", resolution_m)
-        print("   Using extent from extent_index.json")
-        print(f"   Resolution: {resolution_m}m")
+        logger.debug(
+            "Using extent from extent_index.json",
+        )
+        logger.debug(
+            f"Resolution: {resolution_m}m",
+        )
 
     if combined_extent is None:
         # Fallback: Calculate combined extent from SOURCE_EXTENTS
         all_extents = [SOURCE_EXTENTS[s] for s in sources if s in SOURCE_EXTENTS]
         if not all_extents:
-            print("❌ No valid source extents found")
+            logger.error("No valid source extents found")
             return None
 
         combined_extent = {
@@ -507,7 +550,9 @@ def generate_composite_coverage_mask(
             "south": min(ext["south"] for ext in all_extents),
             "north": max(ext["north"] for ext in all_extents),
         }
-        print(f"   Resolution: {resolution_m}m (fallback)")
+        logger.debug(
+            f"Resolution: {resolution_m}m (fallback)",
+        )
 
     # Calculate grid dimensions from extent and resolution
     west_m, south_m = lonlat_to_mercator(
@@ -527,11 +572,13 @@ def generate_composite_coverage_mask(
     if target_shape:
         grid_height, grid_width = target_shape
 
-    print(
-        f"   Extent: {combined_extent['west']:.2f}°E to {combined_extent['east']:.2f}°E, "
+    logger.debug(
+        f"Extent: {combined_extent['west']:.2f}°E to {combined_extent['east']:.2f}°E, "
         f"{combined_extent['south']:.2f}°N to {combined_extent['north']:.2f}°N"
     )
-    print(f"   Dimensions: {grid_width}×{grid_height} pixels")
+    logger.debug(
+        f"Dimensions: {grid_width}×{grid_height} pixels",
+    )
 
     # Initialize composite coverage (all False = uncovered)
     composite_coverage = np.zeros((grid_height, grid_width), dtype=bool)
@@ -541,11 +588,17 @@ def generate_composite_coverage_mask(
         if source_name not in SOURCE_EXTENTS:
             continue
 
-        print(f"\n   Processing {source_name.upper()}...")
+        logger.info(
+            f"Processing {source_name}...",
+            extra={"source": source_name, "operation": "process"},
+        )
         coverage = get_coverage_from_source(source_name)
 
         if coverage is None:
-            print(f"   ⚠️  Skipping {source_name.upper()} (no data)")
+            logger.warning(
+                f"Skipping {source_name} (no data)",
+                extra={"source": source_name},
+            )
             continue
 
         # Reproject to composite grid
@@ -560,23 +613,27 @@ def generate_composite_coverage_mask(
         pixels_after = np.sum(composite_coverage)
         new_pixels = pixels_after - pixels_before
 
-        print(
-            f"   Added {new_pixels:,} pixels from {source_name.upper()} "
-            f"(total: {pixels_after:,})"
+        logger.debug(
+            f"Added {new_pixels:,} pixels from {source_name} "
+            f"(total: {pixels_after:,})",
+            extra={"source": source_name, "count": new_pixels},
         )
 
     # Calculate final coverage stats
     total_covered = np.sum(composite_coverage)
     total_pixels = composite_coverage.size
-    print(
-        f"\n   Final coverage: {total_covered:,} / {total_pixels:,} pixels "
-        f"({100 * total_covered / total_pixels:.1f}%)"
+    logger.info(
+        f"Final coverage: {total_covered:,} / {total_pixels:,} pixels "
+        f"({100 * total_covered / total_pixels:.1f}%)",
     )
 
     # Save coverage mask PNG
     output_path = os.path.join(output_dir, filename)
     _save_coverage_mask_png(composite_coverage, output_path)
-    print(f"   ✅ Saved: {output_path}")
+    logger.info(
+        f"Saved: {output_path}",
+        extra={"operation": "save"},
+    )
 
     return output_path
 
@@ -600,9 +657,10 @@ def generate_all_coverage_masks(
     """
     results = {}
 
-    print("=" * 60)
-    print("GENERATING ALL COVERAGE MASKS")
-    print("=" * 60)
+    logger.info(
+        "Generating all coverage masks...",
+        extra={"operation": "generate"},
+    )
 
     # Generate individual source masks
     for source_name in get_all_source_names():
@@ -613,7 +671,6 @@ def generate_all_coverage_masks(
             path = generate_source_coverage_mask(source_name, output_dir)
             if path:
                 results[source_name] = path
-        print()
 
     # Generate composite mask
     composite_dir = os.path.join(output_base_dir, "composite")
@@ -623,9 +680,9 @@ def generate_all_coverage_masks(
     if path:
         results["composite"] = path
 
-    print()
-    print("=" * 60)
-    print(f"Generated {len(results)} coverage masks")
-    print("=" * 60)
+    logger.info(
+        f"Generated {len(results)} coverage masks",
+        extra={"count": len(results)},
+    )
 
     return results

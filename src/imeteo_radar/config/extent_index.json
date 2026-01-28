@@ -36,7 +36,7 @@
     },
     "dwd": {
       "name": "German Weather Service",
-      "country": "Germany", 
+      "country": "Germany",
       "coverage": "Germany and surrounding areas",
       "extent": {
         "wgs84": {
@@ -57,6 +57,30 @@
       "grid_size": [4800, 4400],
       "resolution_m": [1000, 1000],
       "radar_network": "DWD national radar network"
+    },
+    "imgw": {
+      "name": "Institute of Meteorology and Water Management",
+      "country": "Poland",
+      "coverage": "Poland and surrounding areas",
+      "extent": {
+        "wgs84": {
+          "west": 14.0,
+          "east": 24.1,
+          "south": 49.0,
+          "north": 54.8
+        },
+        "mercator": {
+          "x_min": 1558591.81,
+          "x_max": 2683995.02,
+          "y_min": 6290569.50,
+          "y_max": 7246202.80,
+          "bounds": [1558591.81, 6290569.50, 2683995.02, 7246202.80]
+        }
+      },
+      "projection": "EPSG:3857",
+      "grid_size": [3570, 2380],
+      "resolution_m": [320, 400],
+      "radar_network": "IMGW national radar network"
     }
   },
   "overlap_region": {

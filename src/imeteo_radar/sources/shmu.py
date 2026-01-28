@@ -6,6 +6,7 @@ Handles downloading and processing of SHMU radar data in ODIM_H5 format.
 """
 
 import tempfile
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,12 +15,19 @@ from typing import Any
 import h5py
 import numpy as np
 import requests
+import urllib3
+
+# Suppress SSL verification warnings for SHMU (their certificate has issues)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..core.base import (
     RadarSource,
     extract_hdf5_corner_extent,
     lonlat_to_mercator,
 )
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class SHMURadarSource(RadarSource):
@@ -235,10 +243,10 @@ class SHMURadarSource(RadarSource):
         if products is None:
             products = ["zmax", "cappi2km"]  # Default products
 
-        print(f"🔍 Finding last {count} available SHMU timestamps...")
+        logger.info(f"Finding last {count} available SHMU timestamps...", extra={"source": "shmu"})
 
         # Strategy: Check for current timestamps online
-        print("🌐 Checking SHMU server for current timestamps...")
+        logger.info("Checking SHMU server for current timestamps...", extra={"source": "shmu"})
 
         # Generate more timestamps if we're filtering by time range
         multiplier = 8 if (start_time and end_time) else 4
@@ -249,8 +257,9 @@ class SHMURadarSource(RadarSource):
             test_timestamps = self._filter_timestamps_by_range(
                 test_timestamps, start_time, end_time
             )
-            print(
-                f"📅 Filtered timestamps to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}"
+            logger.info(
+                f"Filtered timestamps to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}",
+                extra={"source": "shmu"},
             )
 
         available_timestamps = []
@@ -262,14 +271,15 @@ class SHMURadarSource(RadarSource):
             # Test with zmax (most reliable product)
             if self._check_timestamp_availability(timestamp, "zmax"):
                 available_timestamps.append(timestamp)
-                print(f"✅ Found current: {timestamp}")
+                logger.info(f"Found current: {timestamp}", extra={"source": "shmu"})
 
         if not available_timestamps:
-            print("❌ No available timestamps found")
+            logger.warning("No available timestamps found", extra={"source": "shmu"})
             return []
 
-        print(
-            f"📥 Downloading {len(available_timestamps)} timestamps × {len(products)} products..."
+        logger.info(
+            f"Downloading {len(available_timestamps)} timestamps × {len(products)} products...",
+            extra={"source": "shmu"},
         )
 
         # Create download tasks
@@ -278,8 +288,9 @@ class SHMURadarSource(RadarSource):
             for product in products:
                 download_tasks.append((timestamp, product))
 
-        print(
-            f"📥 Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)..."
+        logger.info(
+            f"Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)...",
+            extra={"source": "shmu"},
         )
 
         # Execute downloads in parallel
@@ -302,18 +313,20 @@ class SHMURadarSource(RadarSource):
                     if result["success"]:
                         downloaded_files.append(result)
                         if result["cached"]:
-                            print(f"📁 Using cached: {product} {timestamp}")
+                            logger.debug(f"Using cached: {product} {timestamp}", extra={"source": "shmu"})
                         else:
-                            print(f"✅ Downloaded: {product} {timestamp}")
+                            logger.info(f"Downloaded: {product} {timestamp}", extra={"source": "shmu"})
                     else:
-                        print(
-                            f"❌ Failed {product} {timestamp}: {result.get('error', 'Unknown error')}"
+                        logger.error(
+                            f"Failed {product} {timestamp}: {result.get('error', 'Unknown error')}",
+                            extra={"source": "shmu"},
                         )
                 except Exception as e:
-                    print(f"❌ Exception {product} {timestamp}: {e}")
+                    logger.error(f"Exception {product} {timestamp}: {e}", extra={"source": "shmu"})
 
-        print(
-            f"📋 SHMU: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)"
+        logger.info(
+            f"SHMU: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)",
+            extra={"source": "shmu", "count": len(downloaded_files)},
         )
         return downloaded_files
 

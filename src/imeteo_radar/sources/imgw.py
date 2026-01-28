@@ -22,6 +22,9 @@ from ..core.base import (
     extract_hdf5_corner_extent,
     lonlat_to_mercator,
 )
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class IMGWRadarSource(RadarSource):
@@ -100,7 +103,10 @@ class IMGWRadarSource(RadarSource):
 
             return h5_files
         except Exception as e:
-            print(f"⚠️  Failed to fetch file list from API: {e}")
+            logger.warning(
+                f"Failed to fetch file list from API: {e}",
+                extra={"source": "imgw", "operation": "fetch"},
+            )
             return []
 
     def _extract_timestamp_from_filename(self, filename: str) -> str | None:
@@ -292,10 +298,16 @@ class IMGWRadarSource(RadarSource):
         if products is None:
             products = ["cmax"]  # Default product
 
-        print(f"🔍 Finding last {count} available IMGW timestamps...")
+        logger.info(
+            f"Finding last {count} available IMGW timestamps...",
+            extra={"source": "imgw", "operation": "find"},
+        )
 
         # Generate timestamps based on current time (like SHMU/CHMI)
-        print("🌐 Checking IMGW server for current timestamps...")
+        logger.info(
+            "Checking IMGW server for current timestamps...",
+            extra={"source": "imgw"},
+        )
 
         # Generate more timestamps if we're filtering by time range
         multiplier = 8 if (start_time and end_time) else 4
@@ -306,8 +318,9 @@ class IMGWRadarSource(RadarSource):
             test_timestamps = self._filter_timestamps_by_range(
                 test_timestamps, start_time, end_time
             )
-            print(
-                f"📅 Filtered to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}"
+            logger.info(
+                f"Filtered to range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}",
+                extra={"source": "imgw"},
             )
 
         # Check which timestamps are available
@@ -319,14 +332,21 @@ class IMGWRadarSource(RadarSource):
             # Check availability via HEAD request
             if self._check_timestamp_availability(timestamp, "cmax"):
                 available_timestamps.append(timestamp)
-                print(f"✅ Found current: {timestamp}")
+                logger.debug(
+                    f"Found current: {timestamp}",
+                    extra={"source": "imgw", "timestamp": timestamp},
+                )
 
         if not available_timestamps:
-            print("❌ No available timestamps found")
+            logger.warning(
+                "No available timestamps found",
+                extra={"source": "imgw"},
+            )
             return []
 
-        print(
-            f"📥 Downloading {len(available_timestamps)} timestamps × {len(products)} products..."
+        logger.info(
+            f"Downloading {len(available_timestamps)} timestamps × {len(products)} products...",
+            extra={"source": "imgw", "operation": "download", "count": len(available_timestamps)},
         )
 
         # Create download tasks
@@ -336,8 +356,9 @@ class IMGWRadarSource(RadarSource):
                 url = self._get_product_url(timestamp, product)
                 download_tasks.append((timestamp, product, url))
 
-        print(
-            f"📥 Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)..."
+        logger.debug(
+            f"Starting parallel downloads ({len(download_tasks)} files, max 6 concurrent)",
+            extra={"source": "imgw", "operation": "download", "count": len(download_tasks)},
         )
 
         # Execute downloads in parallel
@@ -359,18 +380,49 @@ class IMGWRadarSource(RadarSource):
                     if result["success"]:
                         downloaded_files.append(result)
                         if result["cached"]:
-                            print(f"📁 Using cached: {product} {timestamp}")
+                            logger.debug(
+                                f"Using cached: {product} {timestamp}",
+                                extra={
+                                    "source": "imgw",
+                                    "product": product,
+                                    "timestamp": timestamp,
+                                },
+                            )
                         else:
-                            print(f"✅ Downloaded: {product} {timestamp}")
+                            logger.debug(
+                                f"Downloaded: {product} {timestamp}",
+                                extra={
+                                    "source": "imgw",
+                                    "product": product,
+                                    "timestamp": timestamp,
+                                },
+                            )
                     else:
-                        print(
-                            f"❌ Failed {product} {timestamp}: {result.get('error', 'Unknown error')}"
+                        logger.error(
+                            f"Failed {product} {timestamp}: {result.get('error', 'Unknown error')}",
+                            extra={
+                                "source": "imgw",
+                                "product": product,
+                                "timestamp": timestamp,
+                            },
                         )
                 except Exception as e:
-                    print(f"❌ Exception {product} {timestamp}: {e}")
+                    logger.error(
+                        f"Exception {product} {timestamp}: {e}",
+                        extra={
+                            "source": "imgw",
+                            "product": product,
+                            "timestamp": timestamp,
+                        },
+                    )
 
-        print(
-            f"📋 IMGW: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)"
+        logger.info(
+            f"IMGW: Downloaded {len(downloaded_files)} files ({len(download_tasks) - len(downloaded_files)} failed)",
+            extra={
+                "source": "imgw",
+                "operation": "download",
+                "count": len(downloaded_files),
+            },
         )
         return downloaded_files
 
@@ -422,8 +474,9 @@ class IMGWRadarSource(RadarSource):
                     ur_lat = float(where_attrs["UR_lat"])
                 else:
                     # Fallback: approximate Poland coverage
-                    print(
-                        "⚠️  Corner coordinates not found in HDF5, using approximate extent"
+                    logger.warning(
+                        "Corner coordinates not found in HDF5, using approximate extent",
+                        extra={"source": "imgw"},
                     )
                     ll_lon, ll_lat = 13.0, 48.1
                     ur_lon, ur_lat = 26.4, 56.2

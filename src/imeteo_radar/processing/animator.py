@@ -16,7 +16,8 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
-    print("Warning: PIL (Pillow) not available. Install with: pip install Pillow")
+    import sys
+    print("Warning: PIL (Pillow) not available. Install with: pip install Pillow", file=sys.stderr)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -318,7 +319,7 @@ class RadarAnimator:
                 logger.warning(f"Source directory not found: {source_dir}")
                 continue
 
-            logger.info(f"🎬 Creating animations for {source.upper()}")
+            logger.info(f"Creating animations for {source.upper()}", extra={"operation": "animate"})
             source_results = self.create_source_animation(
                 source_dir, source, output_dir
             )
@@ -341,23 +342,23 @@ def main():
     results = animator.create_all_animations(data_dir, output_dir)
 
     # Print summary
-    print("\n🎯 Animation Summary:")
-    print("=" * 50)
+    logger.info("Animation Summary:")
 
     total_success = 0
     total_attempts = 0
 
     for source, source_results in results.items():
-        print(f"\n{source.upper()}:")
+        logger.info(f"{source.upper()}:")
         for filename, success in source_results.items():
-            status = "✅ SUCCESS" if success else "❌ FAILED"
-            print(f"  {filename}: {status}")
+            status = "SUCCESS" if success else "FAILED"
+            logger.info(f"  {filename}: {status}")
             total_attempts += 1
             if success:
                 total_success += 1
 
-    print(
-        f"\nOverall: {total_success}/{total_attempts} animations created successfully"
+    logger.info(
+        f"Overall: {total_success}/{total_attempts} animations created successfully",
+        extra={"count": total_success},
     )
 
 
