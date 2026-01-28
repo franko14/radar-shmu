@@ -186,6 +186,37 @@ class SpacesUploader:
             logger.error(f"Failed to delete from Spaces: {e}")
             return False
 
+    def file_exists(self, source: str, filename: str) -> bool:
+        """
+        Check if a file exists in DigitalOcean Spaces
+
+        Args:
+            source: Source name ('dwd' for germany, 'shmu' for slovakia, 'composite')
+            filename: Filename to check (e.g., '1234567890.png')
+
+        Returns:
+            bool: True if file exists, False otherwise
+        """
+        # Determine folder based on source using centralized registry
+        folder = _get_folder_for_source(source)
+
+        # Construct S3 key
+        s3_key = f"iradar/{folder}/{filename}"
+
+        try:
+            self.s3_client.head_object(Bucket=self.bucket, Key=s3_key)
+            return True
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            if error_code == "404":
+                return False
+            # Log unexpected errors but don't raise
+            logger.warning(f"Error checking file existence in Spaces: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error checking file existence: {e}")
+            return False
+
     def list_files(self, source: str, prefix: str = "") -> list:
         """
         List files in DigitalOcean Spaces for a given source
