@@ -158,6 +158,92 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail if ARSO data cannot be matched (default: fallback to composite without ARSO)",
     )
+    composite_parser.add_argument(
+        "--min-core-sources",
+        type=int,
+        default=3,
+        help="Minimum core sources (DWD,SHMU,CHMI,OMSZ,IMGW) required for composite (default: 3). "
+        "Allows composite generation even when some sources are in outage.",
+    )
+    composite_parser.add_argument(
+        "--max-data-age",
+        type=int,
+        default=30,
+        help="Maximum age of data in minutes before source is considered in OUTAGE (default: 30).",
+    )
+    composite_parser.add_argument(
+        "--reprocess-count",
+        type=int,
+        default=6,
+        help="Number of recent timestamps to (re)process (default: 6 = 30 min). "
+        "Allows automatic reprocessing when providers backload data after outages.",
+    )
+    composite_parser.add_argument(
+        "--disable-upload",
+        action="store_true",
+        help="Disable upload to DigitalOcean Spaces (for local development only)",
+    )
+
+    # Cache arguments for processed radar data
+    composite_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("/tmp/iradar-data"),
+        help="Directory for processed data cache (default: /tmp/iradar-data)",
+    )
+    composite_parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=60,
+        help="Cache TTL in minutes (default: 60)",
+    )
+    composite_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching entirely",
+    )
+    composite_parser.add_argument(
+        "--no-cache-upload",
+        action="store_true",
+        help="Disable S3 cache sync (local cache only)",
+    )
+    composite_parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear cache before running",
+    )
+
+    # Cache management command
+    cache_parser = subparsers.add_parser(
+        "cache", help="Manage processed radar data cache"
+    )
+    cache_parser.add_argument(
+        "action",
+        choices=["cleanup", "clear", "stats"],
+        help="Action: cleanup (remove expired), clear (remove all), stats (show info)",
+    )
+    cache_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("/tmp/iradar-data"),
+        help="Cache directory (default: /tmp/iradar-data)",
+    )
+    cache_parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=60,
+        help="Cache TTL in minutes for cleanup (default: 60)",
+    )
+    cache_parser.add_argument(
+        "--source",
+        type=str,
+        help="Only operate on specific source (e.g., arso, dwd)",
+    )
+    cache_parser.add_argument(
+        "--no-s3",
+        action="store_true",
+        help="Skip S3 operations (local only)",
+    )
 
     # Coverage mask command - generate static coverage masks
     coverage_parser = subparsers.add_parser(
@@ -554,7 +640,9 @@ def fetch_command(args) -> int:
 
     except ImportError as e:
         logger.error(f"Import error: {e}")
-        logger.error("Please ensure the package is properly installed with: pip install -e .")
+        logger.error(
+            "Please ensure the package is properly installed with: pip install -e ."
+        )
         return 1
     except Exception as e:
         logger.error(f"Error: {e}")
@@ -593,6 +681,8 @@ def main():
             return composite_command(args)
         elif args.command == "coverage-mask":
             return coverage_mask_command(args)
+        elif args.command == "cache":
+            return cache_command(args)
         else:
             logger.error(f"Unknown command: {args.command}")
             return 1
@@ -740,6 +830,65 @@ def coverage_mask_command(args) -> int:
         return 1
     except Exception as e:
         logger.error(f"Error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+
+def cache_command(args) -> int:
+    """Handle cache management command"""
+    try:
+        from .utils.processed_cache import ProcessedDataCache
+
+        s3_enabled = not getattr(args, "no_s3", False)
+        cache = ProcessedDataCache(
+            local_dir=args.cache_dir,
+            ttl_minutes=args.cache_ttl,
+            s3_enabled=s3_enabled,
+        )
+
+        if args.action == "cleanup":
+            logger.info(
+                f"Cleaning up cache (TTL: {args.cache_ttl} min, S3: {s3_enabled})..."
+            )
+            removed = cache.cleanup_expired()
+            logger.info(f"Cleanup complete: {removed} entries removed")
+            return 0
+
+        elif args.action == "clear":
+            source = getattr(args, "source", None)
+            if source:
+                logger.info(f"Clearing cache for source: {source}")
+            else:
+                logger.info("Clearing all cache entries...")
+            removed = cache.clear(source)
+            logger.info(f"Clear complete: {removed} entries removed")
+            return 0
+
+        elif args.action == "stats":
+            stats = cache.get_cache_stats()
+            logger.info("Cache Statistics:")
+            logger.info(f"  Local directory: {stats['local_dir']}")
+            logger.info(f"  TTL: {stats['ttl_minutes']} minutes")
+            logger.info(f"  S3 enabled: {stats['s3_enabled']}")
+            logger.info(f"  Total entries: {stats['total_entries']}")
+            logger.info(f"  Total size: {stats['total_size_mb']} MB")
+            if stats["sources"]:
+                logger.info("  By source:")
+                for source, info in stats["sources"].items():
+                    logger.info(
+                        f"    {source.upper()}: {info['entries']} entries, "
+                        f"{info['size_mb']} MB"
+                    )
+            return 0
+
+        else:
+            logger.error(f"Unknown cache action: {args.action}")
+            return 1
+
+    except Exception as e:
+        logger.error(f"Cache command error: {e}")
         import traceback
 
         traceback.print_exc()
