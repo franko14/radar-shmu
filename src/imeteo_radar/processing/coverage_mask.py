@@ -38,6 +38,7 @@ NODATA_VALUES: dict[str, int] = {
     "chmi": 255,  # uint8 max
     "arso": 64,  # offset byte (ASCII '@')
     "omsz": 255,  # uint8 representation of outside coverage
+    "imgw": 255,  # uint8 max (CMAX product)
 }
 
 # Source extents in WGS84 (for composite calculation)
@@ -52,6 +53,7 @@ SOURCE_EXTENTS: dict[str, dict[str, float]] = {
         "north": 47.414912,
     },
     "omsz": {"west": 13.5, "east": 25.5, "south": 44.0, "north": 50.5},
+    "imgw": {"west": 14.0, "east": 24.1, "south": 49.0, "north": 54.8},
 }
 
 

@@ -665,7 +665,13 @@ def extent_command(args) -> int:
 
         # If processing all sources, save combined file
         if args.source == "all":
-            combined_file = Path("/tmp/radar_extent_combined.json")
+            if args.output:
+                output_dir = args.output
+            else:
+                output_dir = Path("composite")
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            combined_file = output_dir / "extent_index.json"
             with open(combined_file, "w") as f:
                 json.dump(combined_extent, f, indent=2)
             logger.info(f"Saved combined extent to: {combined_file}")
