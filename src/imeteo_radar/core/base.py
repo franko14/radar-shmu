@@ -38,6 +38,82 @@ class RadarSource(ABC):
         """
         pass
 
+    def get_available_timestamps(
+        self,
+        count: int = 8,
+        products: list[str] = None,
+    ) -> list[str]:
+        """Get list of available timestamps from provider WITHOUT downloading.
+
+        This allows the caller to check cache before deciding what to download.
+        Subclasses should implement this to query their provider's available data.
+
+        Args:
+            count: Maximum number of timestamps to return
+            products: List of products to check
+
+        Returns:
+            List of timestamp strings (e.g., ["20260128135000", "20260128134500"])
+            sorted by most recent first
+        """
+        # Default implementation returns empty list - subclasses should override
+        return []
+
+    def download_timestamps(
+        self,
+        timestamps: list[str],
+        products: list[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Download specific timestamps (not the latest N).
+
+        This method downloads only the specified timestamps, allowing
+        selective downloads after checking the cache.
+
+        Default implementation uses _download_single_file if available.
+        Subclasses can override for custom behavior.
+
+        Args:
+            timestamps: List of specific timestamps to download
+            products: List of products to download
+
+        Returns:
+            List of file info dicts with keys:
+            - timestamp: str
+            - product: str
+            - path: str
+            - success: bool
+            - url: str (optional)
+            - error: str (optional, if success=False)
+        """
+        if not timestamps:
+            return []
+
+        # Use default product if not specified
+        if products is None:
+            products = self.get_available_products()[:1] if hasattr(self, 'get_available_products') else []
+
+        if not products:
+            return []
+
+        # Check if subclass has _download_single_file method
+        if hasattr(self, '_download_single_file'):
+            from ..utils.parallel_download import execute_parallel_downloads
+
+            logger.info(
+                f"Downloading {len(timestamps)} {self.name.upper()} timestamps × {len(products)} products...",
+                extra={"source": self.name},
+            )
+
+            download_tasks = [(ts, prod) for ts in timestamps for prod in products]
+            return execute_parallel_downloads(
+                tasks=download_tasks,
+                download_func=self._download_single_file,
+                source_name=self.name,
+            )
+
+        # Fallback: use download_latest (less efficient)
+        return self.download_latest(count=len(timestamps), products=products)
+
     @abstractmethod
     def process_to_array(self, file_path: str) -> dict[str, Any]:
         """
