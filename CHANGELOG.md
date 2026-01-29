@@ -5,6 +5,27 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-01-29
+
+### Added
+- **Cache-aware fetching for single source commands** (`fetch` command)
+  - New `--reprocess-count` argument (default: 6 = 30 minutes)
+  - Full cache integration: `--cache-dir`, `--cache-ttl`, `--no-cache`, `--clear-cache`, `--no-cache-upload`
+  - Multi-timestamp fetching instead of single latest timestamp
+  - Skip redundant downloads (cached timestamps) and uploads (S3 existence check)
+  - Mirrors the robust pattern already implemented in composite command
+
+- **Shared CLI helpers module** (`utils/cli_helpers.py`)
+  - `init_cache_from_args()`: Consistent cache initialization for both fetch and composite
+  - `output_exists()`: Check local and S3 existence to avoid redundant processing/uploads
+
+### Changed
+- **Fetch command default behavior**: Now fetches 6 recent timestamps instead of just 1
+  - Handles irregular provider uploads (data may be missing from latest)
+  - Uses same `--reprocess-count` default (6 = 30 minutes) as composite command
+
+- **Composite command refactored**: Uses shared CLI helpers for cache initialization and S3 checks
+
 ## [2.3.0] - 2026-01-28
 
 ### Added
@@ -54,7 +75,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Combined extent generation now includes Polish radar coverage
 
 ### Changed
+- **Logging standardization**: Replaced 92+ print statements with structured logging across 26 files
+  - 355 total logger statements (159 info, 68 debug, 56 warning, 66 error)
+  - Standardized operation terminology: Finding, Checking, Downloading, Processing, Saving
+  - Consistent source identification via `extra={"source": ...}`
+  - New modules: `core/logging.py`, `core/alerts.py`, `core/retry.py`
 - **Extent command output location**: Combined extent file now saves to `composite/extent_index.json` instead of `/tmp/` for better organization
+
+## [2.2.0] - 2026-01-27
+
+### Added
+- **IMGW (Poland) radar data source**: 6th supported radar source
+  - Data from danepubliczne.imgw.pl public API (no authentication required)
+  - ODIM_H5 format with CMAX product (Column Maximum reflectivity)
+  - 5-minute update intervals
+  - Poland coverage: 13.0°-26.4°E, 48.1°-56.2°N
+  - HEAD request availability checking (API listing lags behind file availability)
+- CLI support: `imeteo-radar fetch --source imgw`
+- Added IMGW to default composite sources
+- Poland output directory: `/tmp/poland/`
+- 54 unit tests covering all IMGW functionality
+
+### Changed
+- Registered IMGW in `SOURCE_REGISTRY` with 'poland' country/folder
+- Updated extent and coverage-mask commands to include IMGW
 
 ## [2.1.1] - 2026-01-22
 
