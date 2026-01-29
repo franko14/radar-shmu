@@ -83,6 +83,44 @@ def create_parser() -> argparse.ArgumentParser:
         help="Disable upload to DigitalOcean Spaces (for local development only)",
     )
 
+    # Reprocess count for non-backload mode
+    fetch_parser.add_argument(
+        "--reprocess-count",
+        type=int,
+        default=6,
+        help="Number of recent timestamps to fetch (default: 6 = 30 min). "
+        "Fetching multiple timestamps handles irregular provider uploads.",
+    )
+
+    # Cache arguments (same as composite for consistency)
+    fetch_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("/tmp/iradar-data"),
+        help="Directory for processed data cache (default: /tmp/iradar-data)",
+    )
+    fetch_parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=60,
+        help="Cache TTL in minutes (default: 60)",
+    )
+    fetch_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching entirely",
+    )
+    fetch_parser.add_argument(
+        "--no-cache-upload",
+        action="store_true",
+        help="Disable S3 cache sync (local cache only)",
+    )
+    fetch_parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear cache before running",
+    )
+
     # Extent command - generate extent information only
     extent_parser = subparsers.add_parser(
         "extent", help="Generate extent information JSON"
@@ -580,55 +618,184 @@ def fetch_command(args) -> int:
             cleanup_old_files(output_dir, max_age_hours=6)
 
         else:
-            # Just fetch latest using LATEST endpoint
-            logger.info("Downloading latest timestamp...")
+            # Fetch multiple recent timestamps with cache awareness
+            # This handles irregular provider uploads by checking multiple timestamps
+            import gc
 
-            if args.source == "dwd":
-                files = source.download_latest(
-                    count=1, products=[product], use_latest=True
+            import matplotlib.pyplot as plt
+
+            from .utils.cli_helpers import init_cache_from_args, output_exists
+            from .utils.timestamps import is_timestamp_in_cache
+
+            reprocess_count = getattr(args, "reprocess_count", 6)
+            logger.info(f"Fetching up to {reprocess_count} recent timestamps...")
+
+            # Initialize cache using shared helper
+            cache = init_cache_from_args(args, upload_enabled)
+
+            # Get available timestamps from provider
+            # Request extra timestamps (+2) to account for potential gaps or filtering
+            available_timestamps = source.get_available_timestamps(
+                count=reprocess_count + 2,
+                products=[product],
+            )
+
+            if not available_timestamps:
+                logger.error("No data available from provider")
+                return 1
+
+            # Determine which timestamps need downloading (cache-aware)
+            timestamps_to_download = []
+            timestamps_from_cache = []
+
+            if cache:
+                cached_ts_set = set(cache.get_available_timestamps(args.source, product))
+                for ts in available_timestamps[:reprocess_count]:
+                    if is_timestamp_in_cache(ts, cached_ts_set):
+                        timestamps_from_cache.append(ts)
+                    else:
+                        timestamps_to_download.append(ts)
+                logger.info(
+                    f"{len(timestamps_from_cache)} in cache, "
+                    f"{len(timestamps_to_download)} to download"
                 )
-            else:  # SHMU
-                files = source.download_latest(count=1, products=[product])
+            else:
+                timestamps_to_download = available_timestamps[:reprocess_count]
 
-            if not files:
+            # Download non-cached timestamps
+            downloaded_files = []
+            if timestamps_to_download:
+                downloaded_files = source.download_timestamps(
+                    timestamps=timestamps_to_download,
+                    products=[product],
+                )
+
+            if not downloaded_files and not timestamps_from_cache:
                 logger.error("No data available")
                 return 1
 
-            file_info = files[0]
-
-            # Extract timestamp for filename
-            timestamp_str = file_info["timestamp"]
-            dt = parse_timestamp_to_datetime(timestamp_str, args.source)
-            unix_timestamp = int(dt.timestamp())
-            filename = f"{unix_timestamp}.png"
-            output_path = output_dir / filename
-
-            # Process to array
-            radar_data = source.process_to_array(file_info["path"])
-
-            # Prepare data for PNG export
-            export_data = {
-                "data": radar_data["data"],
-                "timestamp": timestamp_str,
-                "product": product,
-                "source": args.source,
-                "units": "dBZ",
-            }
-
-            # Export to PNG (using fast method to reduce memory usage)
+            # Process each file
+            processed_count = 0
+            skipped_count = 0
             extent = source.get_extent()
-            exporter.export_png_fast(
-                radar_data=export_data,
-                output_path=output_path,
-                extent=extent,
-                colormap_type="reflectivity_shmu",
+
+            # Process downloaded files
+            for file_info in downloaded_files:
+                try:
+                    timestamp_str = file_info["timestamp"]
+                    dt = parse_timestamp_to_datetime(timestamp_str, args.source)
+                    unix_timestamp = int(dt.timestamp())
+                    filename = f"{unix_timestamp}.png"
+                    output_path = output_dir / filename
+
+                    # Skip if output already exists (local or S3)
+                    if output_exists(
+                        output_path,
+                        args.source,
+                        filename,
+                        uploader if upload_enabled else None,
+                    ):
+                        skipped_count += 1
+                        continue
+
+                    # Process to array
+                    radar_data = source.process_to_array(file_info["path"])
+
+                    # Cache immediately after processing
+                    if cache:
+                        cache.put(args.source, timestamp_str, product, radar_data)
+
+                    # Prepare data for PNG export
+                    export_data = {
+                        "data": radar_data["data"],
+                        "timestamp": timestamp_str,
+                        "product": product,
+                        "source": args.source,
+                        "units": "dBZ",
+                    }
+
+                    # Export to PNG
+                    exporter.export_png_fast(
+                        radar_data=export_data,
+                        output_path=output_path,
+                        extent=extent,
+                        colormap_type="reflectivity_shmu",
+                    )
+
+                    logger.info(f"Saved: {output_path}")
+                    processed_count += 1
+
+                    # Upload to DigitalOcean Spaces if enabled
+                    if upload_enabled and uploader:
+                        uploader.upload_file(output_path, args.source, filename)
+
+                    # Clean up memory
+                    plt.close("all")
+                    del radar_data
+                    gc.collect()
+
+                except Exception as e:
+                    logger.warning(f"Failed to process {file_info['timestamp']}: {e}")
+                    continue
+
+            # Process cached timestamps (check if output exists, skip if so)
+            for ts in timestamps_from_cache:
+                try:
+                    dt = parse_timestamp_to_datetime(ts, args.source)
+                    unix_timestamp = int(dt.timestamp())
+                    filename = f"{unix_timestamp}.png"
+                    output_path = output_dir / filename
+
+                    # Skip if output already exists
+                    if output_exists(
+                        output_path,
+                        args.source,
+                        filename,
+                        uploader if upload_enabled else None,
+                    ):
+                        skipped_count += 1
+                        continue
+
+                    # Get from cache and process
+                    radar_data = cache.get(args.source, ts, product)
+                    if radar_data is None:
+                        logger.debug(f"Cache miss for {ts}, skipping")
+                        continue
+
+                    export_data = {
+                        "data": radar_data["data"],
+                        "timestamp": ts,
+                        "product": product,
+                        "source": args.source,
+                        "units": "dBZ",
+                    }
+
+                    exporter.export_png_fast(
+                        radar_data=export_data,
+                        output_path=output_path,
+                        extent=extent,
+                        colormap_type="reflectivity_shmu",
+                    )
+
+                    logger.info(f"Saved (from cache): {output_path}")
+                    processed_count += 1
+
+                    if upload_enabled and uploader:
+                        uploader.upload_file(output_path, args.source, filename)
+
+                    # Clean up memory
+                    plt.close("all")
+                    del radar_data
+                    gc.collect()
+
+                except Exception as e:
+                    logger.warning(f"Failed to process cached {ts}: {e}")
+                    continue
+
+            # Summary
+            logger.info(
+                f"Processed {processed_count}, skipped {skipped_count} (already exist)"
             )
-
-            logger.info(f"Saved: {output_path}")
-
-            # Upload to DigitalOcean Spaces if enabled
-            if upload_enabled and uploader:
-                uploader.upload_file(output_path, args.source, filename)
 
         # Clean up temporary files
         source.cleanup_temp_files()
