@@ -18,8 +18,9 @@ logger = get_logger(__name__)
 # Fixed reference extent covering all sources (DWD, SHMU, CHMI, OMSZ, ARSO, IMGW)
 # Using this ensures consistent composite dimensions regardless of which sources are available
 # Calculated from the union of all source extents
+# DWD corners: UL(1.46, 55.86), UR(18.73, 55.85), LL(3.57, 45.70), LR(16.58, 45.68)
 REFERENCE_EXTENT = {
-    "west": 2.50,   # DWD westernmost
+    "west": 1.46,   # DWD UL corner (westernmost)
     "east": 26.40,  # IMGW easternmost
     "south": 44.00, # OMSZ southernmost
     "north": 56.20, # IMGW northernmost
@@ -465,24 +466,10 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     reprocess_count = getattr(args, "reprocess_count", DEFAULT_REPROCESS_COUNT)
     tolerance = getattr(args, "timestamp_tolerance", 2)
 
-    # Initialize processed data cache
-    cache = None
-    if not getattr(args, "no_cache", False):
-        from .utils.processed_cache import ProcessedDataCache
+    # Initialize processed data cache using shared helper
+    from .utils.cli_helpers import init_cache_from_args
 
-        s3_enabled = not getattr(args, "no_cache_upload", False)
-        cache = ProcessedDataCache(
-            local_dir=getattr(args, "cache_dir", Path("/tmp/iradar-data")),
-            ttl_minutes=getattr(args, "cache_ttl", 60),
-            s3_enabled=s3_enabled,
-        )
-
-        if getattr(args, "clear_cache", False):
-            cleared = cache.clear()
-            logger.info(f"Cleared {cleared} cache entries")
-
-        # Cleanup expired entries on startup
-        cache.cleanup_expired()
+    cache = init_cache_from_args(args, upload_enabled=not getattr(args, "disable_upload", False))
 
     # ========== STEP 1: DOWNLOAD DATA FROM ALL SOURCES ==========
     logger.info("Downloading data from all sources...")
@@ -797,15 +784,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         output_path = output_dir / filename
 
         # Check if composite already exists locally or in S3 (skip if unchanged)
-        exists_locally = output_path.exists()
-        exists_in_s3 = False
-        if not exists_locally and uploader:
-            try:
-                exists_in_s3 = uploader.file_exists("composite", filename)
-            except Exception:
-                pass  # S3 check failed, proceed with processing
+        from .utils.cli_helpers import output_exists
 
-        if exists_locally or exists_in_s3:
+        if output_exists(output_path, "composite", filename, uploader):
             skip_reasons["already_exists"].append(common_timestamp)
             continue
 
