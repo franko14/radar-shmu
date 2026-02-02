@@ -250,6 +250,11 @@ class CHMIRadarSource(RadarSource):
                 )  # For product/timestamp
                 where_attrs = decode_hdf5_attrs(dict(f["where"].attrs))
 
+                # Extract projection definition from HDF5 (CHMI may use native projection)
+                projdef = where_attrs.get("projdef", "")
+                if isinstance(projdef, bytes):
+                    projdef = projdef.decode()
+
                 # Get scaling parameters and scale data
                 scaling = get_scaling_params(
                     what_attrs,
@@ -274,13 +279,13 @@ class CHMIRadarSource(RadarSource):
                     ur_lon = float(where_attrs["UR_lon"])
                     ur_lat = float(where_attrs["UR_lat"])
                 else:
-                    # Fallback: approximate Czech coverage
+                    # Fallback: actual CHMI extent from HDF5 metadata
                     logger.warning(
-                        "Corner coordinates not found in HDF5, using approximate extent",
+                        "Corner coordinates not found in HDF5, using known extent",
                         extra={"source": "chmi"},
                     )
-                    ll_lon, ll_lat = 12.0, 48.5
-                    ur_lon, ur_lat = 19.0, 51.1
+                    ll_lon, ll_lat = 11.266869, 48.047275
+                    ur_lon, ur_lat = 19.623974, 51.458369
 
                 lons = np.linspace(ll_lon, ur_lon, data.shape[1])
                 lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
@@ -292,9 +297,22 @@ class CHMIRadarSource(RadarSource):
                 start_time = what_dataset_attrs.get("starttime", "")
                 timestamp = start_date + start_time
 
+                # Build projection info for reprojector
+                # CHMI uses a Mercator projection with false easting/northing:
+                # +proj=merc +lat_ts=0 +lon_0=0 +x_0=-1254222.15 +y_0=-6702777.85
+                # This MUST be reprojected from native to Web Mercator.
+                # Although WGS84 corners appear "regular", the data is stored in
+                # native Mercator coordinates (xscale/yscale in meters).
+                projection_info = {
+                    "type": "mercator",
+                    "proj_def": projdef,  # Native projection for reprojection
+                    "where_attrs": where_attrs,
+                }
+
                 return {
                     "data": scaled_data,
-                    "coordinates": {"lons": lons, "lats": lats},
+                    "coordinates": None,  # Use projection instead
+                    "projection": projection_info,
                     "metadata": {
                         "product": product,
                         "quantity": quantity,
@@ -325,8 +343,14 @@ class CHMIRadarSource(RadarSource):
     def get_extent(self) -> dict[str, Any]:
         """Get CHMI radar coverage extent"""
 
-        # CHMI radar coverage (approximate, covering Czech Republic)
-        wgs84 = {"west": 12.0, "east": 19.0, "south": 48.5, "north": 51.1}
+        # CHMI radar coverage - actual bounds from HDF5 metadata
+        # These are the WGS84 corner coordinates from the where attributes
+        wgs84 = {
+            "west": 11.266869,
+            "east": 19.623974,
+            "south": 48.047275,
+            "north": 51.458369,
+        }
 
         # Convert to Web Mercator
         x_min, y_min = lonlat_to_mercator(wgs84["west"], wgs84["south"])
@@ -341,9 +365,9 @@ class CHMIRadarSource(RadarSource):
                 "y_max": y_max,
                 "bounds": [x_min, y_min, x_max, y_max],  # [xmin, ymin, xmax, ymax]
             },
-            "projection": "EPSG:3857",  # Web Mercator (to be verified)
-            "grid_size": None,  # To be determined from actual data
-            "resolution_m": None,  # To be determined from actual data
+            "projection": "EPSG:3857",
+            "grid_size": [598, 378],  # xsize, ysize from HDF5
+            "resolution_m": [1556, 1556],  # xscale, yscale in meters
         }
 
     def extract_extent_only(self, file_path: str) -> dict[str, Any]:
@@ -351,8 +375,13 @@ class CHMIRadarSource(RadarSource):
 
         Uses shared HDF5 corner extraction from base module with Czech fallback.
         """
-        # Fallback extent for Czech Republic
-        fallback = {"west": 12.0, "east": 19.0, "south": 48.5, "north": 51.1}
+        # Fallback extent based on actual CHMI HDF5 metadata
+        fallback = {
+            "west": 11.266869,
+            "east": 19.623974,
+            "south": 48.047275,
+            "north": 51.458369,
+        }
         return extract_hdf5_corner_extent(file_path, fallback_extent=fallback)
 
     # cleanup_temp_files() is inherited from RadarSource base class

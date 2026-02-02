@@ -487,9 +487,26 @@ class ARSORadarSource(RadarSource):
             product = "ZM" if "zm" in file_path.lower() else "RRG"
             quantity = "DBZH" if unit == "DBZ" else "RATE"
 
+            # Build projection info for reprojector
+            # ARSO uses Lambert Conformal Conic (LCC/SIRAD) projection natively
+            # Data has already been transformed to WGS84 coordinates during processing
+            # Document the native projection for reference and potential future use
+            projection_info = {
+                "type": "wgs84",  # Output is WGS84 after transformation
+                "native_projection": "lcc",
+                "native_proj_def": self.SIRAD_PROJ4,
+                "grid_params": {
+                    "ncell": self.GRID_NCELL,
+                    "cellsize_km": self.GRID_CELLSIZE,
+                    "center_cell": self.GRID_CENTER,
+                    "geoss_cell": self.GEOSS_CELL,
+                },
+            }
+
             return {
                 "data": data,
-                "coordinates": {"lons": self._lons, "lats": self._lats},
+                "coordinates": None,  # Use projection instead
+                "projection": projection_info,
                 "metadata": {
                     "product": product,
                     "quantity": quantity,
@@ -498,7 +515,7 @@ class ARSORadarSource(RadarSource):
                     "units": self._get_units(unit),
                     "nodata_value": np.nan,
                     "domain": domain,
-                    "projection": "LCC (SIRAD)",
+                    "native_projection": "LCC (SIRAD)",
                 },
                 "extent": {"wgs84": self._extent_wgs84},
                 "dimensions": data.shape,

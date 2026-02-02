@@ -554,12 +554,13 @@ class DWDRadarSource(RadarSource):
     def get_extent(self) -> dict[str, Any]:
         """Get DWD radar coverage extent"""
 
-        # DWD radar coverage (actual data bounds - larger than Germany proper)
+        # DWD radar coverage - actual bounds from reprojected GeoTIFF
+        # Polar stereographic projection reprojected to Web Mercator
         wgs84 = {
-            "west": 2.5,  # Extended to cover actual data range
-            "east": 18.0,  # Extended to cover actual data range
-            "south": 45.5,  # Extended to cover actual data range
-            "north": 56.0,
+            "west": 1.461077,
+            "east": 18.732899,
+            "south": 45.683144,
+            "north": 56.220458,
         }
 
         # Convert to Web Mercator

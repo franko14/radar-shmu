@@ -348,6 +348,11 @@ class IMGWRadarSource(RadarSource):
                 what_global = decode_hdf5_attrs(dict(f["what"].attrs))  # Global metadata
                 where_attrs = decode_hdf5_attrs(dict(f["where"].attrs))
 
+                # Extract projection definition from HDF5 (IMGW may use native projection)
+                projdef = where_attrs.get("projdef", "")
+                if isinstance(projdef, bytes):
+                    projdef = projdef.decode()
+
                 # Get scaling parameters
                 scaling = get_scaling_params(
                     what_attrs,
@@ -393,9 +398,27 @@ class IMGWRadarSource(RadarSource):
                 start_time_str = what_attrs.get("starttime", what_global.get("time", ""))
                 timestamp = str(start_date) + str(start_time_str)
 
+                # Build projection info for reprojector
+                # IMGW uses ODIM_H5 format - check for native projection (projdef)
+                # If projdef exists, data is in that projection with WGS84 corner coords
+                if projdef and projdef.strip():
+                    # Native projection (similar to SHMU mercator handling)
+                    projection_info = {
+                        "type": "mercator",
+                        "proj_def": projdef,
+                        "where_attrs": where_attrs,
+                    }
+                else:
+                    # Pure WGS84 lat/lon grid
+                    projection_info = {
+                        "type": "wgs84",
+                        "where_attrs": where_attrs,
+                    }
+
                 return {
                     "data": scaled_data,
-                    "coordinates": {"lons": lons, "lats": lats},
+                    "coordinates": None,  # Use projection instead
+                    "projection": projection_info,
                     "metadata": {
                         "product": product,
                         "quantity": quantity,
@@ -426,9 +449,14 @@ class IMGWRadarSource(RadarSource):
     def get_extent(self) -> dict[str, Any]:
         """Get IMGW radar coverage extent"""
 
-        # IMGW radar coverage (from actual HDF5 data)
-        # Covers Poland and surrounding areas
-        wgs84 = {"west": 13.0, "east": 26.4, "south": 48.1, "north": 56.2}
+        # IMGW radar coverage - actual bounds from reprojected GeoTIFF
+        # Azimuthal equidistant projection reprojected to Web Mercator
+        wgs84 = {
+            "west": 11.804019,
+            "east": 26.376516,
+            "south": 48.124377,
+            "north": 56.398335,
+        }
 
         # Convert to Web Mercator
         x_min, y_min = lonlat_to_mercator(wgs84["west"], wgs84["south"])

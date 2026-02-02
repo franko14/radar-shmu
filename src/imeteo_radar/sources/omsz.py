@@ -346,6 +346,13 @@ class OMSZRadarSource(RadarSource):
                 scaled_data[raw_data == 255] = np.nan  # Outside coverage
                 scaled_data[raw_data == 0] = np.nan  # Grey coverage mask (background)
 
+                # Convert MaskedArray to regular ndarray (rasterio can't handle MaskedArray)
+                # netCDF4 returns MaskedArray by default, which causes issues with reprojection
+                if hasattr(scaled_data, 'filled'):
+                    scaled_data = scaled_data.filled(np.nan)
+                else:
+                    scaled_data = np.asarray(scaled_data)
+
                 # Get dimensions
                 n_lat, n_lon = raw_data.shape
 
@@ -359,9 +366,25 @@ class OMSZRadarSource(RadarSource):
                 lons = np.linspace(west, east, n_lon)
                 lats = np.linspace(north, south, n_lat)  # North to south
 
+                # Build projection info for reprojector
+                # OMSZ uses pure WGS84 lat/lon grid (NetCDF format)
+                # Include grid parameters for documentation and verification
+                projection_info = {
+                    "type": "wgs84",
+                    "grid_params": {
+                        "La1": la1,  # First latitude (north)
+                        "Lo1": lo1,  # First longitude (west)
+                        "Dx": dx,    # Longitude increment
+                        "Dy": dy,    # Latitude increment
+                        "n_lat": n_lat,
+                        "n_lon": n_lon,
+                    },
+                }
+
                 return {
                     "data": scaled_data,
-                    "coordinates": {"lons": lons, "lats": lats},
+                    "coordinates": None,  # Use projection instead
+                    "projection": projection_info,
                     "metadata": {
                         "product": var_name,
                         "quantity": "DBZH",
@@ -390,14 +413,18 @@ class OMSZRadarSource(RadarSource):
     def get_extent(self) -> dict[str, Any]:
         """Get OMSZ radar coverage extent
 
-        Based on actual netCDF data:
+        Based on actual netCDF data reprojected to Web Mercator:
         - La1=50.5, Lo1=13.5
         - Grid: 813 x 961
         - Dx=0.0125, Dy=0.008
-        - Calculated extent: N=50.5, S=44.0, W=13.5, E=25.5
         """
-        # OMSZ radar coverage (from actual data)
-        wgs84 = {"west": 13.5, "east": 25.5, "south": 44.0, "north": 50.5}
+        # OMSZ radar coverage - actual bounds from reprojected GeoTIFF
+        wgs84 = {
+            "west": 13.500000,
+            "east": 25.507733,
+            "south": 43.993974,
+            "north": 50.500000,
+        }
 
         # Convert to Web Mercator
         x_min, y_min = lonlat_to_mercator(wgs84["west"], wgs84["south"])

@@ -42,12 +42,13 @@ from ..utils.timestamps import (
 logger = get_logger(__name__)
 
 
-# SHMU-specific constants
+# SHMU-specific constants - actual bounds from reprojected GeoTIFF
+# Custom Mercator projection reprojected to Web Mercator
 SHMU_FALLBACK_EXTENT = {
-    "west": 13.6,
-    "east": 23.8,
-    "south": 46.0,
-    "north": 50.7,
+    "west": 13.597751,
+    "east": 23.806870,
+    "south": 46.045447,
+    "north": 50.701424,
 }
 
 
@@ -224,7 +225,7 @@ class SHMURadarSource(RadarSource):
     ) -> list[dict[str, Any]]:
         """Download latest SHMU radar data"""
         if products is None:
-            products = ["zmax", "cappi2km"]
+            products = ["zmax"]  # cappi2km available but disabled by default
 
         logger.info(
             f"Finding last {count} available SHMU timestamps...",
@@ -284,7 +285,7 @@ class SHMURadarSource(RadarSource):
                     handle_uint8=True,  # SHMU uses 255 as nodata for uint8
                 )
 
-                # Create coordinate arrays
+                # Extract corner coordinates directly from HDF5 data
                 ll_lon = float(where_attrs["LL_lon"])
                 ll_lat = float(where_attrs["LL_lat"])
                 ur_lon = float(where_attrs["UR_lon"])
@@ -300,9 +301,24 @@ class SHMURadarSource(RadarSource):
                 start_time = what_attrs.get("starttime", "")
                 timestamp = start_date + start_time
 
+                # Build projection info for reprojector
+                # SHMU data is in a custom Mercator projection (projdef)
+                # The corner coordinates (LL/UL/UR/LR) are WGS84 positions of grid corners
+                # NOTE: xscale/yscale in HDF5 are INCORRECT - do not use them
+                projdef = where_attrs.get("projdef", "")
+                if isinstance(projdef, bytes):
+                    projdef = projdef.decode()
+
+                projection_info = {
+                    "type": "mercator",
+                    "proj_def": projdef,
+                    "where_attrs": where_attrs,
+                }
+
                 return {
                     "data": scaled_data,
-                    "coordinates": {"lons": lons, "lats": lats},
+                    "coordinates": None,  # Don't use coordinates, use projection instead
+                    "projection": projection_info,
                     "metadata": {
                         "product": product,
                         "quantity": quantity,
