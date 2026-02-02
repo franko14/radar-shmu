@@ -917,11 +917,13 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 "source": "composite",
                 "units": "dBZ",
             }
+            # Composite data is already in Web Mercator, no reprojection needed
             exporter.export_png_fast(
                 radar_data=radar_data_for_export,
                 output_path=output_path,
                 extent={"wgs84": composite["extent"]},
                 colormap_type="shmu",
+                reproject=False,  # Already in Web Mercator
             )
 
             logger.info(
@@ -985,18 +987,52 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     return 0
 
 
+def _get_individual_source_dir(source_name: str, composite_output: Path) -> Path:
+    """Get output directory for individual source images.
+
+    Individual sources are saved as siblings of the composite directory:
+    - If composite output is ./outputs/composite/
+    - Then DWD goes to ./outputs/germany/, SHMU to ./outputs/slovakia/, etc.
+
+    Args:
+        source_name: Source identifier (e.g., 'dwd', 'shmu')
+        composite_output: Path to composite output directory
+
+    Returns:
+        Path to individual source output directory
+    """
+    # Map source names to country folder names
+    source_to_country = {
+        "dwd": "germany",
+        "shmu": "slovakia",
+        "chmi": "czechia",
+        "arso": "slovenia",
+        "omsz": "hungary",
+        "imgw": "poland",
+    }
+
+    country = source_to_country.get(source_name)
+    if not country:
+        return None
+
+    # Individual sources are siblings of composite directory
+    base_dir = composite_output.parent
+    return base_dir / country
+
+
 def _export_individual_sources(
     sources_data, exporter, unix_timestamp, timestamp_str, args, uploader=None
 ):
     """Export individual source images with their native extents.
 
-    Each source is exported to its own directory:
-    - DWD -> /tmp/germany/
-    - SHMU -> /tmp/slovakia/
-    - CHMI -> /tmp/czechia/
-    - ARSO -> /tmp/slovenia/
-    - OMSZ -> /tmp/hungary/
-    - IMGW -> /tmp/poland/
+    Each source is exported to a sibling directory of the composite output:
+    - If composite is ./outputs/composite/
+    - DWD -> ./outputs/germany/
+    - SHMU -> ./outputs/slovakia/
+    - CHMI -> ./outputs/czechia/
+    - ARSO -> ./outputs/slovenia/
+    - OMSZ -> ./outputs/hungary/
+    - IMGW -> ./outputs/poland/
 
     Args:
         sources_data: List of (source_name, radar_data) tuples
@@ -1008,19 +1044,11 @@ def _export_individual_sources(
     """
     import json
 
-    # Source name to output directory mapping
-    source_dirs = {
-        "dwd": Path("/tmp/germany/"),
-        "shmu": Path("/tmp/slovakia/"),
-        "chmi": Path("/tmp/czechia/"),
-        "arso": Path("/tmp/slovenia"),
-        "omsz": Path("/tmp/hungary/"),
-        "imgw": Path("/tmp/poland/"),
-    }
+    composite_output = Path(args.output)
 
     for source_name, radar_data in sources_data:
-        # Get output directory for this source
-        source_output_dir = source_dirs.get(source_name)
+        # Get output directory for this source (sibling of composite dir)
+        source_output_dir = _get_individual_source_dir(source_name, composite_output)
         if source_output_dir is None:
             logger.warning(f"Unknown source {source_name}, skipping individual export")
             continue
@@ -1032,24 +1060,25 @@ def _export_individual_sources(
         filename = f"{unix_timestamp}.png"
         output_path = source_output_dir / filename
 
-        # Prepare radar data for export
-        radar_data_for_export = {
-            "data": radar_data["data"],
-            "timestamp": timestamp_str,
-            "product": radar_data.get("product", "unknown"),
-            "source": source_name,
-            "units": "dBZ",
-            "metadata": radar_data.get("metadata", {}),
-        }
+        # Use radar_data directly - it contains data, extent, and projection info
+        # needed for proper reprojection to Web Mercator
+        radar_data["timestamp"] = timestamp_str
+        radar_data["metadata"] = radar_data.get("metadata", {})
+        radar_data["metadata"]["source"] = source_name
+        radar_data["metadata"]["units"] = "dBZ"
 
-        # Export to PNG with native extent
+        # Export to PNG with reprojection to Web Mercator
         logger.info(f"{source_name.upper()} -> {output_path}")
-        exporter.export_png_fast(
-            radar_data=radar_data_for_export,
+        _, export_metadata = exporter.export_png_fast(
+            radar_data=radar_data,
             output_path=output_path,
             extent=radar_data["extent"],
             colormap_type="shmu",
+            reproject=True,  # Reproject to EPSG:3857 for proper positioning
         )
+
+        # Get the REPROJECTED bounds from export metadata (not native bounds)
+        reprojected_extent = export_metadata.get("extent", radar_data.get("extent", {}).get("wgs84", {}))
 
         # Upload individual source to DigitalOcean Spaces
         if uploader:
@@ -1059,16 +1088,16 @@ def _export_individual_sources(
             except Exception as e:
                 logger.warning(f"Failed to upload {source_name}: {e}")
 
-        # Save extent_index.json if it doesn't exist
+        # Save extent_index.json with REPROJECTED bounds (matches the PNG)
         extent_file = source_output_dir / "extent_index.json"
         if not extent_file.exists() or args.update_extent:
             extent_data = {
                 "metadata": {
                     "title": f"{source_name.upper()} Radar Coverage",
-                    "description": f"Native extent for {source_name.upper()} radar data",
+                    "description": f"Reprojected extent for {source_name.upper()} radar data",
                     "source": source_name,
                 },
-                "extent": radar_data["extent"],
+                "wgs84": reprojected_extent,
             }
             with open(extent_file, "w") as f:
                 json.dump(extent_data, f, indent=2)
@@ -1089,6 +1118,9 @@ def _export_single_source(
     This function is used in the two-pass architecture to export individual
     source images while processing sources one at a time.
 
+    Individual sources are saved as siblings of the composite directory:
+    - If composite is ./outputs/composite/, DWD goes to ./outputs/germany/
+
     Args:
         source_name: Source identifier (e.g., 'dwd', 'shmu')
         radar_data: Dictionary from source.process_to_array()
@@ -1100,17 +1132,9 @@ def _export_single_source(
     """
     import json
 
-    # Source name to output directory mapping
-    source_dirs = {
-        "dwd": Path("/tmp/germany/"),
-        "shmu": Path("/tmp/slovakia/"),
-        "chmi": Path("/tmp/czechia/"),
-        "arso": Path("/tmp/slovenia/"),
-        "omsz": Path("/tmp/hungary/"),
-        "imgw": Path("/tmp/poland/"),
-    }
-
-    output_dir = source_dirs.get(source_name)
+    # Get output directory (sibling of composite dir)
+    composite_output = Path(args.output)
+    output_dir = _get_individual_source_dir(source_name, composite_output)
     if not output_dir:
         return
 
@@ -1120,25 +1144,26 @@ def _export_single_source(
     # Generate filename
     output_path = output_dir / f"{unix_timestamp}.png"
 
-    # Prepare radar data for export
-    radar_data_for_export = {
-        "data": radar_data["data"],
-        "timestamp": timestamp_str,
-        "product": radar_data.get("metadata", {}).get("product", "unknown"),
-        "source": source_name,
-        "units": "dBZ",
-        "metadata": radar_data.get("metadata", {}),
-    }
+    # Use radar_data directly - it contains data, extent, and projection info
+    # needed for proper reprojection to Web Mercator
+    radar_data["timestamp"] = timestamp_str
+    radar_data["metadata"] = radar_data.get("metadata", {})
+    radar_data["metadata"]["source"] = source_name
+    radar_data["metadata"]["units"] = "dBZ"
 
-    # Export to PNG with native extent
+    # Export to PNG with reprojection to Web Mercator
     filename = f"{unix_timestamp}.png"
     logger.debug(f"{source_name.upper()} -> {output_path}")
-    exporter.export_png_fast(
-        radar_data=radar_data_for_export,
+    _, export_metadata = exporter.export_png_fast(
+        radar_data=radar_data,
         output_path=output_path,
         extent=radar_data["extent"],
         colormap_type="shmu",
+        reproject=True,  # Reproject to EPSG:3857 for proper positioning
     )
+
+    # Get the REPROJECTED bounds from export metadata (not native bounds)
+    reprojected_extent = export_metadata.get("extent", radar_data.get("extent", {}).get("wgs84", {}))
 
     # Upload individual source to DigitalOcean Spaces
     if uploader:
@@ -1148,16 +1173,16 @@ def _export_single_source(
         except Exception as e:
             logger.warning(f"Failed to upload {source_name}: {e}")
 
-    # Save extent_index.json if it doesn't exist
+    # Save extent_index.json with REPROJECTED bounds (matches the PNG)
     extent_file = output_dir / "extent_index.json"
     if not extent_file.exists() or args.update_extent:
         extent_data = {
             "metadata": {
                 "title": f"{source_name.upper()} Radar Coverage",
-                "description": f"Native extent for {source_name.upper()} radar data",
+                "description": f"Reprojected extent for {source_name.upper()} radar data",
                 "source": source_name,
             },
-            "extent": radar_data["extent"],
+            "wgs84": reprojected_extent,
         }
         with open(extent_file, "w") as f:
             json.dump(extent_data, f, indent=2)
@@ -1341,11 +1366,13 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
                 "source": "composite",
                 "units": "dBZ",
             }
+            # Composite data is already in Web Mercator, no reprojection needed
             exporter.export_png_fast(
                 radar_data=radar_data_for_export,
                 output_path=output_path,
                 extent={"wgs84": composite["extent"]},
                 colormap_type="shmu",
+                reproject=False,  # Already in Web Mercator
             )
 
             # Upload composite to DigitalOcean Spaces
