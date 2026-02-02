@@ -27,17 +27,36 @@ graph LR
 ## Key Commands
 
 ```bash
-# Fetch from single source
-imeteo-radar fetch --source dwd|shmu|chmi
+# Fetch from single source (saves to outputs/{source}/)
+imeteo-radar fetch --source dwd --output ./outputs/germany
+imeteo-radar fetch --source shmu --output ./outputs/slovakia
+imeteo-radar fetch --source chmi --output ./outputs/czechia
+imeteo-radar fetch --source imgw --output ./outputs/poland
+imeteo-radar fetch --source omsz --output ./outputs/hungary
+imeteo-radar fetch --source arso --output ./outputs/slovenia
 
 # Generate composite
-imeteo-radar composite
+imeteo-radar composite --output ./outputs/composite
 
 # Generate extent metadata
 imeteo-radar extent --source all
 
 # Backload historical data
-imeteo-radar fetch --source dwd --backload --hours 6
+imeteo-radar fetch --source dwd --backload --hours 6 --output ./outputs/germany
+```
+
+## Output Directory Structure
+
+```
+outputs/
+├── index.html          # Leaflet viewer (DO NOT DELETE)
+├── germany/            # DWD radar data
+├── slovakia/           # SHMU radar data
+├── czechia/            # CHMI radar data
+├── poland/             # IMGW radar data
+├── hungary/            # OMSZ radar data
+├── slovenia/           # ARSO radar data
+└── composite/          # Merged composite images
 ```
 
 ## Quick Start
