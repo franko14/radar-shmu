@@ -42,8 +42,10 @@ NODATA_VALUES: dict[str, int] = {
 }
 
 # Source extents in WGS84 (for composite calculation)
+# DWD extent derived from actual HDF5 corner coordinates:
+# UL: (1.46, 55.86), UR: (18.73, 55.85), LL: (3.57, 45.70), LR: (16.58, 45.68)
 SOURCE_EXTENTS: dict[str, dict[str, float]] = {
-    "dwd": {"west": 2.5, "east": 18.0, "south": 45.5, "north": 56.0},
+    "dwd": {"west": 1.46, "east": 18.73, "south": 45.68, "north": 55.86},
     "shmu": {"west": 13.6, "east": 23.8, "south": 46.0, "north": 50.7},
     "chmi": {"west": 12.0, "east": 19.0, "south": 48.5, "north": 51.1},
     "arso": {

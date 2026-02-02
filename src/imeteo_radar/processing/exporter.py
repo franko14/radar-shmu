@@ -41,9 +41,86 @@ except ImportError:
 class PNGExporter:
     """Exports radar data as transparent PNG overlays"""
 
-    def __init__(self):
+    def __init__(self, use_transform_cache: bool = True):
+        """Initialize PNG exporter.
+
+        Args:
+            use_transform_cache: Whether to use cached transform grids for
+                faster reprojection (10-50x speedup). Default True.
+        """
         self.colormaps = self._initialize_colormaps()
         self.colormap_luts = self._build_colormap_luts()
+        self._use_transform_cache = use_transform_cache
+        self._transform_cache = None
+
+    def _get_transform_cache(self):
+        """Lazy-initialize transform cache."""
+        if self._transform_cache is None and self._use_transform_cache:
+            try:
+                from .transform_cache import TransformCache
+
+                self._transform_cache = TransformCache()
+            except Exception as e:
+                logger.warning(f"Failed to initialize transform cache: {e}")
+                self._use_transform_cache = False
+        return self._transform_cache
+
+    def _reproject_with_cache(
+        self,
+        data: np.ndarray,
+        projection_info: dict[str, Any],
+        source_name: str,
+    ) -> tuple[np.ndarray, dict[str, float], bool]:
+        """Attempt to reproject using cached transform grid.
+
+        Args:
+            data: Source data array
+            projection_info: Projection info dict with proj_def and where_attrs
+            source_name: Source identifier for cache lookup
+
+        Returns:
+            Tuple of (reprojected_data, wgs84_bounds, success_flag)
+            If success_flag is False, caller should fall back to runtime reprojection
+        """
+        try:
+            from .reprojector import build_native_params_from_projection_info
+            from .transform_cache import fast_reproject
+
+            cache = self._get_transform_cache()
+            if cache is None:
+                return data, {}, False
+
+            # Build native CRS, transform, and bounds from projection info
+            native_crs, native_transform, native_bounds = (
+                build_native_params_from_projection_info(data.shape, projection_info)
+            )
+
+            if native_crs is None:
+                # Source uses WGS84 or projection info not suitable for caching
+                return data, {}, False
+
+            # Get or compute transform grid (checks memory, disk, S3)
+            grid = cache.get_or_compute(
+                source_name=source_name,
+                src_shape=data.shape,
+                native_crs=native_crs,
+                native_transform=native_transform,
+                native_bounds=native_bounds,
+            )
+
+            # Fast reprojection using precomputed indices
+            reprojected = fast_reproject(data, grid)
+
+            logger.debug(
+                f"Used cached transform for {source_name}: "
+                f"{data.shape} -> {grid.dst_shape}"
+            )
+
+            return reprojected, grid.wgs84_bounds, True
+
+        except Exception as e:
+            logger.debug(f"Cache reproject failed, falling back to runtime: {e}")
+            return data, {}, False
 
     def _initialize_colormaps(self):
         """Initialize colormaps - SHMU colormap is the single source of truth"""
@@ -247,6 +324,8 @@ class PNGExporter:
         extent: dict[str, Any],
         colormap_type: str = "auto",
         transparent_background: bool = True,
+        reproject: bool = True,
+        use_cached_transform: bool = True,
     ) -> tuple[Path, dict[str, Any]]:
         """
         Fast PNG export using PIL (4-10x faster than matplotlib)
@@ -257,6 +336,9 @@ class PNGExporter:
             extent: Geographic extent information
             colormap_type: Type of colormap to use ('auto', 'shmu', etc.)
             transparent_background: Whether to make background transparent
+            reproject: Whether to reproject data to Web Mercator (EPSG:3857)
+            use_cached_transform: Whether to use cached transform grids for
+                faster reprojection. Default True.
 
         Returns:
             Tuple of (saved_path, metadata_dict)
@@ -267,6 +349,58 @@ class PNGExporter:
 
             if data is None or data.size == 0:
                 raise ValueError("Empty or invalid radar data")
+
+            # Optionally reproject to Web Mercator for proper web map display
+            output_extent = extent
+            used_cache = False
+
+            if reproject:
+                # Get projection info from radar_data if available
+                projection_info = radar_data.get("projection")
+                source_name = radar_data.get("metadata", {}).get("source", "").lower()
+
+                # Try fast path with cached transform first
+                if (
+                    use_cached_transform
+                    and self._use_transform_cache
+                    and projection_info
+                    and projection_info.get("proj_def")
+                ):
+                    data, wgs84_bounds, used_cache = self._reproject_with_cache(
+                        data, projection_info, source_name
+                    )
+                    if used_cache:
+                        output_extent = {"wgs84": wgs84_bounds}
+
+                # Fall back to runtime reprojection if cache not used
+                if not used_cache:
+                    from .reprojector import (
+                        build_native_params_from_projection_info,
+                        reproject_to_web_mercator,
+                        reproject_to_web_mercator_accurate,
+                    )
+
+                    data_extent = radar_data.get("extent", extent)
+
+                    # Try accurate reprojection for projected sources
+                    native_crs, native_transform, native_bounds = (
+                        build_native_params_from_projection_info(data.shape, projection_info)
+                    )
+
+                    if native_crs is not None:
+                        # Use accurate reprojection with calculate_default_transform
+                        data, wgs84_bounds, _ = reproject_to_web_mercator_accurate(
+                            data, native_crs, native_transform, native_bounds
+                        )
+                    else:
+                        # WGS84 source - use simple reprojection
+                        data, wgs84_bounds = reproject_to_web_mercator(
+                            data=data,
+                            extent=data_extent,
+                            projection_info=projection_info,
+                        )
+                    # Update extent with reprojected bounds for metadata
+                    output_extent = {"wgs84": wgs84_bounds}
 
             logger.debug(
                 f"Fast PNG export: {data.shape} -> {output_path}",
@@ -336,19 +470,23 @@ class PNGExporter:
                 compress_level=9,  # Maximum compression for smallest file size
             )
 
-            # Create metadata
+            # Create metadata with extent info for Leaflet overlays
+            wgs84_extent = output_extent.get("wgs84", extent.get("wgs84", {}))
             metadata = {
                 "file_path": str(output_path),
                 "dimensions": data.shape,
+                "extent": wgs84_extent,  # WGS84 bounds for Leaflet ImageOverlay
                 "extent_reference": "config/extent_index.json",
                 "source": radar_data.get("metadata", {}).get("source", "unknown"),
                 "colormap": cmap_name,
                 "units": lut_info["units"],
                 "data_range": [float(np.nanmin(data)), float(np.nanmax(data))],
                 "valid_pixels": int(np.sum(valid_mask)),
+                "used_cached_transform": used_cache,
                 "transparent": transparent_background,
                 "timestamp": radar_data.get("timestamp", "unknown"),
                 "export_method": "PIL_fast_LUT",
+                "reprojected": reproject,
                 "format": "PNG (8-bit indexed palette, optimized)",
             }
 
