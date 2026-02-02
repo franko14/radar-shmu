@@ -283,6 +283,48 @@ def create_parser() -> argparse.ArgumentParser:
         help="Skip S3 operations (local only)",
     )
 
+    # Transform cache command - manage precomputed transformation grids
+    transform_cache_parser = subparsers.add_parser(
+        "transform-cache",
+        help="Manage precomputed transformation grids for fast reprojection",
+    )
+    transform_cache_parser.add_argument(
+        "--precompute",
+        action="store_true",
+        help="Precompute transform grids for sources",
+    )
+    transform_cache_parser.add_argument(
+        "--download-s3",
+        action="store_true",
+        help="Download transform grids from S3 to local cache",
+    )
+    transform_cache_parser.add_argument(
+        "--clear-local",
+        action="store_true",
+        help="Clear local transform cache",
+    )
+    transform_cache_parser.add_argument(
+        "--clear-s3",
+        action="store_true",
+        help="Clear S3 transform cache",
+    )
+    transform_cache_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show transform cache statistics",
+    )
+    transform_cache_parser.add_argument(
+        "--upload-s3",
+        action="store_true",
+        help="Upload precomputed grids to S3 (use with --precompute)",
+    )
+    transform_cache_parser.add_argument(
+        "--source",
+        choices=["dwd", "shmu", "chmi", "arso", "omsz", "imgw", "all"],
+        default="all",
+        help="Source to operate on (default: all)",
+    )
+
     # Coverage mask command - generate static coverage masks
     coverage_parser = subparsers.add_parser(
         "coverage-mask", help="Generate static coverage mask PNG files"
@@ -565,25 +607,24 @@ def fetch_command(args) -> int:
                     filename = f"{unix_timestamp}.png"
                     output_path = output_dir / filename
 
-                    # Process to array
+                    # Process to array - this returns projection info needed for reprojection
                     radar_data = source.process_to_array(file_info["path"])
 
-                    # Prepare data for PNG export
-                    export_data = {
-                        "data": radar_data["data"],
-                        "timestamp": timestamp_str,
-                        "product": product,
-                        "source": args.source,
-                        "units": "dBZ",
-                    }
+                    # Use radar_data directly - it contains data, extent, and projection info
+                    # needed for proper reprojection to Web Mercator
+                    radar_data["timestamp"] = timestamp_str
+                    radar_data["metadata"] = radar_data.get("metadata", {})
+                    radar_data["metadata"]["source"] = args.source
+                    radar_data["metadata"]["units"] = "dBZ"
 
-                    # Export to PNG (using fast method to reduce memory usage)
+                    # Export to PNG with reprojection to Web Mercator
                     extent = source.get_extent()
                     exporter.export_png_fast(
-                        radar_data=export_data,
+                        radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
                         colormap_type="reflectivity_shmu",  # Use SHMU colormap for consistency
+                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
                     )
 
                     logger.info(f"Saved: {output_path}")
@@ -698,28 +739,26 @@ def fetch_command(args) -> int:
                         skipped_count += 1
                         continue
 
-                    # Process to array
+                    # Process to array - this returns projection info needed for reprojection
                     radar_data = source.process_to_array(file_info["path"])
 
                     # Cache immediately after processing
                     if cache:
                         cache.put(args.source, timestamp_str, product, radar_data)
 
-                    # Prepare data for PNG export
-                    export_data = {
-                        "data": radar_data["data"],
-                        "timestamp": timestamp_str,
-                        "product": product,
-                        "source": args.source,
-                        "units": "dBZ",
-                    }
+                    # Use radar_data directly - it contains data, extent, and projection info
+                    radar_data["timestamp"] = timestamp_str
+                    radar_data["metadata"] = radar_data.get("metadata", {})
+                    radar_data["metadata"]["source"] = args.source
+                    radar_data["metadata"]["units"] = "dBZ"
 
-                    # Export to PNG
+                    # Export to PNG with reprojection to Web Mercator
                     exporter.export_png_fast(
-                        radar_data=export_data,
+                        radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
                         colormap_type="reflectivity_shmu",
+                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
                     )
 
                     logger.info(f"Saved: {output_path}")
@@ -762,19 +801,18 @@ def fetch_command(args) -> int:
                         logger.debug(f"Cache miss for {ts}, skipping")
                         continue
 
-                    export_data = {
-                        "data": radar_data["data"],
-                        "timestamp": ts,
-                        "product": product,
-                        "source": args.source,
-                        "units": "dBZ",
-                    }
+                    # Use radar_data directly - it contains data, extent, and projection info
+                    radar_data["timestamp"] = ts
+                    radar_data["metadata"] = radar_data.get("metadata", {})
+                    radar_data["metadata"]["source"] = args.source
+                    radar_data["metadata"]["units"] = "dBZ"
 
                     exporter.export_png_fast(
-                        radar_data=export_data,
+                        radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
                         colormap_type="reflectivity_shmu",
+                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
                     )
 
                     logger.info(f"Saved (from cache): {output_path}")
@@ -850,6 +888,8 @@ def main():
             return coverage_mask_command(args)
         elif args.command == "cache":
             return cache_command(args)
+        elif args.command == "transform-cache":
+            return transform_cache_command(args)
         else:
             logger.error(f"Unknown command: {args.command}")
             return 1
@@ -1056,6 +1096,110 @@ def cache_command(args) -> int:
 
     except Exception as e:
         logger.error(f"Cache command error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+
+def transform_cache_command(args) -> int:
+    """Handle transform cache management command"""
+    try:
+        from .processing.transform_cache import TransformCache
+
+        cache = TransformCache()
+
+        # Determine which sources to process
+        if args.source == "all":
+            from .config.sources import get_all_source_names
+
+            sources = get_all_source_names()
+        else:
+            sources = [args.source]
+
+        if args.stats:
+            # Show cache statistics
+            stats = cache.get_stats()
+            logger.info("Transform Cache Statistics:")
+            logger.info(f"  Local directory: {stats['local_dir']}")
+            logger.info(f"  S3 enabled: {stats['s3_enabled']}")
+            logger.info(f"  S3 prefix: {stats['s3_prefix']}")
+            logger.info(f"  Memory cache: {stats['memory_cache_entries']} entries, "
+                       f"{stats['memory_cache_size_mb']} MB")
+            logger.info(f"  Local cache: {stats['local_entries']} entries, "
+                       f"{stats['local_size_mb']} MB")
+            logger.info(f"  S3 cache: {stats['s3_entries']} entries")
+
+            if stats["sources"]:
+                logger.info("  By source:")
+                for source, info in stats["sources"].items():
+                    tiers = []
+                    if info["memory"]:
+                        tiers.append("memory")
+                    if info["local"]:
+                        tiers.append("local")
+                    if info["s3"]:
+                        tiers.append("s3")
+                    logger.info(f"    {source.upper()}: {', '.join(tiers) if tiers else 'none'}")
+            return 0
+
+        if args.clear_local:
+            # Clear local cache
+            removed = cache.clear_local()
+            logger.info(f"Cleared {removed} local transform cache entries")
+            return 0
+
+        if args.clear_s3:
+            # Clear S3 cache
+            removed = cache.clear_s3()
+            logger.info(f"Cleared {removed} S3 transform cache entries")
+            return 0
+
+        if args.download_s3:
+            # Download from S3 to local cache
+            downloaded = cache.download_from_s3()
+            logger.info(f"Downloaded {downloaded} transform cache entries from S3")
+            return 0
+
+        if args.precompute:
+            # Precompute transform grids for sources
+            upload_to_s3 = args.upload_s3
+            success_count = 0
+            skip_count = 0
+
+            for source_name in sources:
+                logger.info(f"Precomputing transform grid for {source_name.upper()}...")
+                try:
+                    grid = cache.precompute_for_source(
+                        source_name=source_name,
+                        upload_to_s3=upload_to_s3,
+                    )
+                    if grid:
+                        logger.info(
+                            f"  {source_name.upper()}: "
+                            f"{grid.src_shape[0]}x{grid.src_shape[1]} -> "
+                            f"{grid.dst_shape[0]}x{grid.dst_shape[1]}, "
+                            f"{grid.memory_size_mb():.1f} MB"
+                        )
+                        success_count += 1
+                    else:
+                        logger.info(f"  {source_name.upper()}: Skipped (WGS84 or no data)")
+                        skip_count += 1
+                except Exception as e:
+                    logger.warning(f"  {source_name.upper()}: Failed - {e}")
+
+            logger.info(f"Precompute complete: {success_count} computed, {skip_count} skipped")
+            return 0
+
+        # If no action specified, show help
+        logger.error("No action specified. Use --precompute, --download-s3, --clear-local, --clear-s3, or --stats")
+        return 1
+
+    except ImportError as e:
+        logger.error(f"Import error: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Transform cache command error: {e}")
         import traceback
 
         traceback.print_exc()
