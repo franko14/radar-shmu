@@ -38,17 +38,6 @@ logger = get_logger(__name__)
 # Coverage mask color for uncovered areas
 UNCOVERED_COLOR = (128, 128, 128, 255)  # Gray, fully opaque
 
-# Nodata values for each source (used to detect coverage boundary)
-# These are the raw values that indicate "outside radar coverage"
-NODATA_VALUES: dict[str, int] = {
-    "dwd": 65535,  # uint16 max
-    "shmu": 255,  # uint8 max
-    "chmi": 255,  # uint8 max
-    "arso": 64,  # offset byte (ASCII '@')
-    "omsz": 255,  # uint8 representation of outside coverage
-    "imgw": 255,  # uint8 max (CMAX product)
-}
-
 
 def _load_extent_index(output_dir: str) -> dict[str, Any] | None:
     """
@@ -74,8 +63,10 @@ def _get_wgs84_from_extent_index(extent_data: dict[str, Any]) -> dict[str, float
     """
     Extract WGS84 bounds from extent_index.json data.
 
-    Handles both individual source format (top-level 'wgs84' key)
-    and composite format (nested under 'extent' key).
+    Handles all three known formats:
+    - Composite pipeline: top-level 'wgs84' key
+    - Composite metadata: nested under 'extent.wgs84'
+    - CLI fetch: nested under 'source.extent' (with west/east/south/north)
 
     Args:
         extent_data: Parsed extent_index.json data
@@ -83,14 +74,20 @@ def _get_wgs84_from_extent_index(extent_data: dict[str, Any]) -> dict[str, float
     Returns:
         Dictionary with west, east, south, north or None
     """
-    # Individual source format: top-level "wgs84" key
+    # Composite pipeline format: top-level "wgs84" key
     if "wgs84" in extent_data:
         return extent_data["wgs84"]
 
-    # Composite format: nested under "extent"
+    # Composite metadata format: nested under "extent.wgs84"
     extent = extent_data.get("extent", {})
     if "wgs84" in extent:
         return extent["wgs84"]
+
+    # CLI fetch format: nested under "source.extent"
+    source = extent_data.get("source", {})
+    source_extent = source.get("extent", {})
+    if "west" in source_extent:
+        return source_extent
 
     return None
 
@@ -119,20 +116,6 @@ def _load_source_extent(
         return None
 
     return _get_wgs84_from_extent_index(extent_data)
-
-
-def _resize_coverage_to_target(
-    coverage: np.ndarray, target_shape: tuple[int, int]
-) -> np.ndarray:
-    """Resize coverage array to match target dimensions using nearest neighbor."""
-    if coverage.shape == target_shape:
-        return coverage
-
-    zoom_factors = (
-        target_shape[0] / coverage.shape[0],
-        target_shape[1] / coverage.shape[1],
-    )
-    return zoom(coverage.astype(float), zoom_factors, order=0) > 0.5
 
 
 def _save_coverage_mask_png(coverage: np.ndarray, output_path: str) -> str:
@@ -402,95 +385,65 @@ def get_coverage_from_source(source_name: str) -> np.ndarray | None:
     return coverage
 
 
-def _reproject_coverage_to_mercator(
+def _reproject_coverage_to_target(
     coverage: np.ndarray,
     projection_info: dict[str, Any] | None,
     extent: dict[str, Any] | None,
-    target_shape: tuple[int, int] | None = None,
-) -> tuple[np.ndarray, dict[str, float]] | None:
+    target_wgs84: dict[str, float],
+    target_shape: tuple[int, int],
+) -> np.ndarray | None:
     """
-    Reproject a coverage boolean through the same CRS pipeline as data PNGs.
+    Reproject coverage directly into the target grid defined by extent_index.json.
 
-    Uses rasterio.warp.reproject for projected sources (DWD, SHMU, CHMI, IMGW)
-    and simple bounds-based transform for WGS84 sources (OMSZ, ARSO).
+    Instead of reprojecting to an intermediate grid and resizing (which causes
+    bounds mismatch), this reprojects directly into the exact pixel grid that
+    the data PNGs occupy. The target grid is defined by:
+    - target_wgs84: WGS84 bounds from extent_index.json
+    - target_shape: (height, width) from existing data PNGs
 
     Args:
         coverage: Boolean coverage array in native projection
         projection_info: Source projection info (from process_to_array)
-        extent: Source extent dict with wgs84 bounds
-        target_shape: Optional target (height, width) to resize result
+        extent: Source extent dict with wgs84 bounds (for WGS84 sources)
+        target_wgs84: WGS84 bounds from extent_index.json
+        target_shape: (height, width) matching existing data PNGs
 
     Returns:
-        Tuple of (reprojected_coverage, wgs84_bounds) or None on failure
+        Boolean coverage array in target grid, or None on failure
     """
     from .reprojector import build_native_params_from_projection_info
 
     height, width = coverage.shape
+    dst_height, dst_width = target_shape
 
     # Convert boolean to float for reprojection (rasterio needs numeric)
     coverage_float = coverage.astype(np.float32)
 
-    # Check if source has a native projection (non-WGS84)
+    # Build destination transform from extent_index.json bounds in Web Mercator
+    west_m, south_m = lonlat_to_mercator(
+        target_wgs84["west"], target_wgs84["south"]
+    )
+    east_m, north_m = lonlat_to_mercator(
+        target_wgs84["east"], target_wgs84["north"]
+    )
+    dst_transform = from_bounds(west_m, south_m, east_m, north_m, dst_width, dst_height)
+    dst_crs = get_crs_web_mercator()
+
+    # Determine source CRS and transform
     native_crs = None
     if projection_info:
         result = build_native_params_from_projection_info(
             coverage.shape, projection_info
         )
         if result[0] is not None:
-            native_crs, native_transform, native_bounds = result
+            native_crs, native_transform, _ = result
 
     if native_crs is not None:
-        # Projected source: reproject through rasterio
-        from rasterio.warp import calculate_default_transform
-
-        web_mercator = get_crs_web_mercator()
-        left, bottom, right, top = native_bounds
-
-        # Calculate optimal output grid (same as data PNG pipeline)
-        dst_transform, dst_width, dst_height = calculate_default_transform(
-            native_crs, web_mercator, width, height,
-            left=left, bottom=bottom, right=right, top=top,
-        )
-
-        # Reproject coverage
-        reprojected = np.zeros((dst_height, dst_width), dtype=np.float32)
-        reproject(
-            source=coverage_float,
-            destination=reprojected,
-            src_transform=native_transform,
-            src_crs=native_crs,
-            dst_transform=dst_transform,
-            dst_crs=web_mercator,
-            resampling=Resampling.nearest,
-            src_nodata=0.0,
-            dst_nodata=0.0,
-        )
-
-        # Convert back to boolean
-        result_coverage = reprojected > 0.5
-
-        # Calculate WGS84 bounds from reprojected transform
-        from pyproj import Transformer
-        from ..core.projections import PROJ4_WEB_MERCATOR, PROJ4_WGS84
-
-        merc_left = dst_transform.c
-        merc_top = dst_transform.f
-        merc_right = merc_left + dst_width * dst_transform.a
-        merc_bottom = merc_top + dst_height * dst_transform.e
-
-        transformer = Transformer.from_crs(
-            PROJ4_WEB_MERCATOR, PROJ4_WGS84, always_xy=True
-        )
-        west, south = transformer.transform(merc_left, merc_bottom)
-        east, north = transformer.transform(merc_right, merc_top)
-
-        wgs84_bounds = {
-            "west": west, "east": east,
-            "south": south, "north": north,
-        }
-
+        # Projected source (DWD, SHMU, CHMI, IMGW): reproject from native CRS
+        src_crs = native_crs
+        src_transform = native_transform
     else:
-        # WGS84 source: reproject from WGS84 to Web Mercator
+        # WGS84 source (OMSZ, ARSO): reproject from WGS84
         if extent is None:
             return None
 
@@ -500,41 +453,24 @@ def _reproject_coverage_to_mercator(
         s = wgs84.get("south", 0)
         n = wgs84.get("north", 0)
 
-        # Source transform in WGS84
+        src_crs = get_crs_wgs84()
         src_transform = from_bounds(w, s, e, n, width, height)
 
-        # Destination in Web Mercator
-        west_m, south_m = lonlat_to_mercator(w, s)
-        east_m, north_m = lonlat_to_mercator(e, n)
+    # Reproject directly into target grid
+    reprojected = np.zeros((dst_height, dst_width), dtype=np.float32)
+    reproject(
+        source=coverage_float,
+        destination=reprojected,
+        src_transform=src_transform,
+        src_crs=src_crs,
+        dst_transform=dst_transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.nearest,
+        src_nodata=0.0,
+        dst_nodata=0.0,
+    )
 
-        # Keep similar pixel count
-        dst_width = width
-        dst_height = height
-        dst_transform = from_bounds(
-            west_m, south_m, east_m, north_m, dst_width, dst_height
-        )
-
-        reprojected = np.zeros((dst_height, dst_width), dtype=np.float32)
-        reproject(
-            source=coverage_float,
-            destination=reprojected,
-            src_transform=src_transform,
-            src_crs=get_crs_wgs84(),
-            dst_transform=dst_transform,
-            dst_crs=get_crs_web_mercator(),
-            resampling=Resampling.nearest,
-            src_nodata=0.0,
-            dst_nodata=0.0,
-        )
-
-        result_coverage = reprojected > 0.5
-        wgs84_bounds = {"west": w, "east": e, "south": s, "north": n}
-
-    # Resize to target if needed
-    if target_shape and result_coverage.shape != target_shape:
-        result_coverage = _resize_coverage_to_target(result_coverage, target_shape)
-
-    return result_coverage, wgs84_bounds
+    return reprojected > 0.5
 
 
 def _get_target_dimensions_from_pngs(output_dir: str) -> tuple[int, int] | None:
@@ -558,9 +494,10 @@ def generate_source_coverage_mask(
     """
     Generate a coverage mask PNG for a single radar source.
 
-    Reads actual radar data, reprojects coverage through the same CRS
-    pipeline as the data PNGs, and resizes to match existing PNG dimensions.
-    This ensures pixel-perfect alignment with extent_index.json.
+    Reads actual radar data and reprojects coverage directly into the target
+    grid defined by extent_index.json bounds + existing data PNG dimensions.
+    This guarantees pixel-perfect alignment because the mask occupies the
+    exact same pixel grid as the data PNGs.
 
     Args:
         source_name: Source identifier (e.g., 'dwd', 'shmu')
@@ -577,13 +514,39 @@ def generate_source_coverage_mask(
         extra={"source": source_name, "operation": "generate"},
     )
 
-    # Get target dimensions from existing radar PNGs
-    target_shape = _get_target_dimensions_from_pngs(output_dir)
-    if target_shape:
-        logger.debug(
-            f"Target dimensions from existing PNGs: {target_shape[1]}x{target_shape[0]}",
+    # Load target extent from extent_index.json
+    extent_data = _load_extent_index(output_dir)
+    if extent_data is None:
+        logger.error(
+            f"No extent_index.json in {output_dir}. "
+            "Run 'imeteo-radar fetch' first to generate extent data.",
             extra={"source": source_name},
         )
+        return None
+
+    target_wgs84 = _get_wgs84_from_extent_index(extent_data)
+    if target_wgs84 is None:
+        logger.error(
+            f"No WGS84 bounds in extent_index.json for {source_name}",
+            extra={"source": source_name},
+        )
+        return None
+
+    # Get target dimensions from existing radar PNGs
+    target_shape = _get_target_dimensions_from_pngs(output_dir)
+    if target_shape is None:
+        logger.error(
+            f"No existing data PNGs in {output_dir} to determine target dimensions",
+            extra={"source": source_name},
+        )
+        return None
+
+    logger.debug(
+        f"Target: {target_shape[1]}x{target_shape[0]} pixels, "
+        f"bounds: ({target_wgs84['west']:.4f}, {target_wgs84['south']:.4f}) to "
+        f"({target_wgs84['east']:.4f}, {target_wgs84['north']:.4f})",
+        extra={"source": source_name},
+    )
 
     # Get coverage AND projection info from actual radar data
     result = _get_coverage_and_projection(source_name)
@@ -597,35 +560,26 @@ def generate_source_coverage_mask(
         extra={"source": source_name},
     )
 
-    # Reproject coverage through same CRS pipeline as data PNGs
-    reproj_result = _reproject_coverage_to_mercator(
-        coverage, projection_info, extent, target_shape
+    # Reproject coverage directly into the target grid (extent_index bounds + PNG dims)
+    reprojected = _reproject_coverage_to_target(
+        coverage, projection_info, extent, target_wgs84, target_shape
     )
 
-    if reproj_result is not None:
-        coverage, wgs84_bounds = reproj_result
-        logger.debug(
-            f"Reprojected coverage: {coverage.shape[1]}x{coverage.shape[0]} pixels, "
-            f"bounds: ({wgs84_bounds['west']:.4f}, {wgs84_bounds['south']:.4f}) to "
-            f"({wgs84_bounds['east']:.4f}, {wgs84_bounds['north']:.4f})",
+    if reprojected is None:
+        logger.error(
+            f"Reprojection failed for {source_name}",
             extra={"source": source_name},
         )
-    elif target_shape and coverage.shape != target_shape:
-        # Fallback: simple resize (should not normally happen)
-        logger.warning(
-            f"Reprojection failed, falling back to resize for {source_name}",
-            extra={"source": source_name},
-        )
-        coverage = _resize_coverage_to_target(coverage, target_shape)
+        return None
 
     logger.debug(
-        f"Final mask dimensions: {coverage.shape[1]}x{coverage.shape[0]} pixels",
+        f"Final mask dimensions: {reprojected.shape[1]}x{reprojected.shape[0]} pixels",
         extra={"source": source_name},
     )
 
     # Save coverage mask PNG
     output_path = os.path.join(output_dir, filename)
-    _save_coverage_mask_png(coverage, output_path)
+    _save_coverage_mask_png(reprojected, output_path)
     logger.info(
         f"Saved: {output_path}",
         extra={"source": source_name, "operation": "save"},
@@ -746,54 +700,47 @@ def generate_composite_coverage_mask(
     )
     logger.debug(f"Sources: {', '.join(s for s in sources)}")
 
-    # First, try to get dimensions from existing composite PNGs
-    target_shape = _get_target_dimensions_from_pngs(output_dir)
-    if target_shape:
-        logger.debug(
-            f"Target dimensions from existing PNGs: {target_shape[1]}x{target_shape[0]}",
-        )
-
-    # Load composite extent from extent_index.json
+    # Load resolution from composite extent_index.json
     extent_info = _load_extent_index(output_dir)
-    combined_extent = None
-
     if extent_info:
-        combined_extent = _get_wgs84_from_extent_index(extent_info)
         metadata = extent_info.get("metadata", {})
         resolution_m = metadata.get("resolution_m", resolution_m)
-        logger.debug("Using extent from extent_index.json")
-        logger.debug(f"Resolution: {resolution_m}m")
 
-    if combined_extent is None:
-        # Fallback: load extents from per-source extent_index.json files
-        logger.debug("No composite extent_index.json, loading per-source extents")
-        source_extents = {}
-        for s in sources:
-            ext = _load_source_extent(s, output_base_dir)
-            if ext:
-                source_extents[s] = ext
+    # Build mask extent as the UNION of all individual source extents.
+    # This may be larger than the composite data extent (e.g., IMGW extends
+    # further north than the composite grid). The mask covers the full area
+    # of all sources without stretching existing composite data.
+    source_extents = {}
+    for s in sources:
+        ext = _load_source_extent(s, output_base_dir)
+        if ext:
+            source_extents[s] = ext
 
-        if source_extents:
-            combined_extent = {
-                "west": min(ext["west"] for ext in source_extents.values()),
-                "east": max(ext["east"] for ext in source_extents.values()),
-                "south": min(ext["south"] for ext in source_extents.values()),
-                "north": max(ext["north"] for ext in source_extents.values()),
-            }
-            logger.debug(f"Combined extent from {len(source_extents)} source extent_index.json files")
-        else:
-            logger.error(
-                "No extent_index.json files found. Run 'imeteo-radar fetch' first "
-                "to generate extent data for each source."
-            )
-            return None
+    if not source_extents:
+        logger.error(
+            "No extent_index.json files found. Run 'imeteo-radar fetch' first "
+            "to generate extent data for each source."
+        )
+        return None
 
-    # Calculate grid dimensions from extent and resolution
+    mask_extent = {
+        "west": min(ext["west"] for ext in source_extents.values()),
+        "east": max(ext["east"] for ext in source_extents.values()),
+        "south": min(ext["south"] for ext in source_extents.values()),
+        "north": max(ext["north"] for ext in source_extents.values()),
+    }
+    logger.debug(
+        f"Mask extent (union of {len(source_extents)} sources): "
+        f"({mask_extent['west']:.4f}, {mask_extent['south']:.4f}) to "
+        f"({mask_extent['east']:.4f}, {mask_extent['north']:.4f})"
+    )
+
+    # Calculate grid dimensions from mask extent at composite resolution
     west_m, south_m = lonlat_to_mercator(
-        combined_extent["west"], combined_extent["south"]
+        mask_extent["west"], mask_extent["south"]
     )
     east_m, north_m = lonlat_to_mercator(
-        combined_extent["east"], combined_extent["north"]
+        mask_extent["east"], mask_extent["north"]
     )
 
     width_m = east_m - west_m
@@ -802,60 +749,51 @@ def generate_composite_coverage_mask(
     grid_width = int(np.ceil(width_m / resolution_m))
     grid_height = int(np.ceil(height_m / resolution_m))
 
-    # Use PNG dimensions if available (they should match calculated dimensions)
-    if target_shape:
-        grid_height, grid_width = target_shape
-
-    logger.debug(
-        f"Extent: {combined_extent['west']:.4f}E to {combined_extent['east']:.4f}E, "
-        f"{combined_extent['south']:.4f}N to {combined_extent['north']:.4f}N"
-    )
+    logger.debug(f"Resolution: {resolution_m}m")
     logger.debug(f"Dimensions: {grid_width}x{grid_height} pixels")
 
     # Initialize composite coverage (all False = uncovered)
     composite_coverage = np.zeros((grid_height, grid_width), dtype=bool)
 
-    # Get coverage from each source and reproject to composite grid
+    # Load existing individual coverage_mask.png files and composite them.
+    # These are already in Web Mercator, already sized to match data PNGs,
+    # so using their extent_index.json bounds guarantees alignment.
     for source_name in sources:
-        logger.info(
-            f"Processing {source_name}...",
-            extra={"source": source_name, "operation": "process"},
-        )
+        config = get_source_config(source_name)
+        if not config:
+            continue
 
-        # Get coverage + projection info
-        result = _get_coverage_and_projection(source_name)
-        if result is None:
-            logger.warning(
-                f"Skipping {source_name} (no data)",
+        source_dir = os.path.join(output_base_dir, config["folder"])
+        mask_path = os.path.join(source_dir, "coverage_mask.png")
+
+        if not os.path.exists(mask_path):
+            logger.debug(
+                f"Skipping {source_name} (no coverage_mask.png in {source_dir})",
                 extra={"source": source_name},
             )
             continue
 
-        coverage, projection_info, extent = result
-
-        # Reproject coverage to Web Mercator first
-        reproj_result = _reproject_coverage_to_mercator(
-            coverage, projection_info, extent
-        )
-
-        if reproj_result is None:
-            logger.warning(
-                f"Skipping {source_name} (reprojection failed)",
-                extra={"source": source_name},
-            )
-            continue
-
-        reprojected_coverage, source_wgs84 = reproj_result
-
-        # Load actual reprojected extent from extent_index.json if available
+        # Load source extent from extent_index.json
         source_extent = _load_source_extent(source_name, output_base_dir)
         if source_extent is None:
-            # Use bounds from reprojection
-            source_extent = source_wgs84
+            logger.warning(
+                f"Skipping {source_name} (no extent_index.json)",
+                extra={"source": source_name},
+            )
+            continue
 
-        # Map reprojected coverage into composite grid
+        # Read the existing mask PNG: transparent (alpha=0) = covered
+        mask_img = np.array(Image.open(mask_path).convert("RGBA"))
+        source_coverage = mask_img[:, :, 3] == 0  # transparent = covered
+
+        logger.info(
+            f"Loading {source_name} mask: {source_coverage.shape[1]}x{source_coverage.shape[0]}",
+            extra={"source": source_name, "operation": "load"},
+        )
+
+        # Map source coverage into mask grid using extent_index.json bounds
         mapped = _reproject_coverage_to_composite(
-            reprojected_coverage, source_extent, combined_extent,
+            source_coverage, source_extent, mask_extent,
             (grid_height, grid_width),
         )
 
@@ -886,6 +824,12 @@ def generate_composite_coverage_mask(
         f"Saved: {output_path}",
         extra={"operation": "save"},
     )
+
+    # Save mask extent (may differ from composite data extent)
+    mask_extent_path = os.path.join(output_dir, "coverage_mask_extent.json")
+    with open(mask_extent_path, "w") as f:
+        json.dump({"wgs84": mask_extent}, f, indent=2)
+    logger.debug(f"Saved mask extent: {mask_extent_path}")
 
     return output_path
 

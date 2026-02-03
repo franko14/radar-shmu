@@ -9,25 +9,24 @@
 set -e
 
 INTERVAL_SECONDS=120  # 2 minutes
-DURATION_SECONDS=1200 # 20 minutes
-ITERATIONS=$((DURATION_SECONDS / INTERVAL_SECONDS))
 
 echo "========================================"
-echo "Composite Loop Started"
+echo "Composite Loop Started (Running Indefinitely)"
 echo "========================================"
 echo "Interval: ${INTERVAL_SECONDS}s (2 min)"
-echo "Duration: ${DURATION_SECONDS}s (20 min)"
-echo "Iterations: ${ITERATIONS}"
 echo "Sources: dwd,shmu,chmi,omsz,imgw (excluding ARSO)"
 echo "Backload: 1 hour"
 echo "Output: ./outputs/composite"
+echo "Press Ctrl+C to stop"
 echo "========================================"
 echo ""
 
-for i in $(seq 1 $ITERATIONS); do
+ITERATION=0
+while true; do
+    ITERATION=$((ITERATION + 1))
     echo ""
     echo "========================================"
-    echo "Iteration $i of $ITERATIONS - $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Iteration $ITERATION - $(date '+%Y-%m-%d %H:%M:%S')"
     echo "========================================"
 
     # Run composite with backload
@@ -39,12 +38,9 @@ for i in $(seq 1 $ITERATIONS); do
         --update-extent \
         2>&1
 
-    # Check if this is the last iteration
-    if [ $i -lt $ITERATIONS ]; then
-        echo ""
-        echo "Waiting ${INTERVAL_SECONDS} seconds until next run..."
-        sleep $INTERVAL_SECONDS
-    fi
+    echo ""
+    echo "Waiting ${INTERVAL_SECONDS} seconds until next run..."
+    sleep $INTERVAL_SECONDS
 done
 
 echo ""
