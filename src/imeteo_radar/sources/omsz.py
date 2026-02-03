@@ -314,7 +314,11 @@ class OMSZRadarSource(RadarSource):
                 else:
                     var_name = "refl2D"
 
-                # Read raw data
+                # Read raw data WITHOUT auto-masking
+                # netCDF4 applies default _FillValue=-127 for int8, which masks
+                # uint8 value 129 = 32.5 dBZ (moderate rain). We handle nodata
+                # ourselves below (0=background, 255=outside coverage).
+                dataset.variables[var_name].set_auto_mask(False)
                 raw_data = dataset.variables[var_name][:]
 
                 # Get coordinate parameters
@@ -346,12 +350,8 @@ class OMSZRadarSource(RadarSource):
                 scaled_data[raw_data == 255] = np.nan  # Outside coverage
                 scaled_data[raw_data == 0] = np.nan  # Grey coverage mask (background)
 
-                # Convert MaskedArray to regular ndarray (rasterio can't handle MaskedArray)
-                # netCDF4 returns MaskedArray by default, which causes issues with reprojection
-                if hasattr(scaled_data, 'filled'):
-                    scaled_data = scaled_data.filled(np.nan)
-                else:
-                    scaled_data = np.asarray(scaled_data)
+                # Ensure regular ndarray (auto-mask is disabled, but be safe)
+                scaled_data = np.asarray(scaled_data, dtype=np.float32)
 
                 # Get dimensions
                 n_lat, n_lon = raw_data.shape
