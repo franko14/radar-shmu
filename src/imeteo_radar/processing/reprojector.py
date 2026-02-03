@@ -19,32 +19,14 @@ from rasterio.warp import Resampling, calculate_default_transform, reproject
 
 from ..core.base import lonlat_to_mercator
 from ..core.logging import get_logger
+from ..core.projections import (
+    PROJ4_WEB_MERCATOR,
+    PROJ4_WGS84,
+    get_crs_web_mercator,
+    get_crs_wgs84,
+)
 
 logger = get_logger(__name__)
-
-# Lazily initialized CRS objects using proj4 strings (avoids PROJ database issues)
-_CRS_WGS84 = None
-_CRS_WEB_MERCATOR = None
-
-# Proj4 strings avoid EPSG database lookup issues
-PROJ4_WGS84 = "+proj=longlat +datum=WGS84 +no_defs"
-PROJ4_WEB_MERCATOR = "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs"
-
-
-def get_crs_wgs84() -> CRS:
-    """Get WGS84 CRS, lazily initialized using proj4 string."""
-    global _CRS_WGS84
-    if _CRS_WGS84 is None:
-        _CRS_WGS84 = CRS.from_string(PROJ4_WGS84)
-    return _CRS_WGS84
-
-
-def get_crs_web_mercator() -> CRS:
-    """Get Web Mercator CRS, lazily initialized using proj4 string."""
-    global _CRS_WEB_MERCATOR
-    if _CRS_WEB_MERCATOR is None:
-        _CRS_WEB_MERCATOR = CRS.from_string(PROJ4_WEB_MERCATOR)
-    return _CRS_WEB_MERCATOR
 
 
 def reproject_to_web_mercator(

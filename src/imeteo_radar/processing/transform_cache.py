@@ -18,6 +18,7 @@ Storage Format:
 """
 
 import hashlib
+import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,15 +31,16 @@ from rasterio.transform import Affine
 from rasterio.warp import calculate_default_transform
 
 from ..core.logging import get_logger
+from ..core.projections import (
+    CACHE_VERSION,
+    PROJ4_WEB_MERCATOR,
+    PROJ4_WGS84,
+    get_crs_web_mercator,
+    validate_grid_dimensions,
+    validate_source_name,
+)
 
 logger = get_logger(__name__)
-
-# Cache version - increment when grid computation logic changes
-CACHE_VERSION = "v1"
-
-# Proj4 strings for transformers
-PROJ4_WGS84 = "+proj=longlat +datum=WGS84 +no_defs"
-PROJ4_WEB_MERCATOR = "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +no_defs"
 
 
 @dataclass
@@ -172,20 +174,36 @@ class TransformCache:
 
         Returns:
             Cache key string like 'shmu_1560x2270_v1'
+
+        Raises:
+            ValueError: If source_name is invalid (path traversal prevention)
         """
-        height, width = src_shape
+        # Validate source name to prevent path traversal attacks
+        validated_source = validate_source_name(source_name)
+
+        # Validate dimensions
+        height, width = validate_grid_dimensions(src_shape[0], src_shape[1])
 
         # Include bounds hash if provided (for sources with dynamic bounds)
         if native_bounds:
             bounds_str = f"{native_bounds[0]:.0f}_{native_bounds[1]:.0f}_{native_bounds[2]:.0f}_{native_bounds[3]:.0f}"
             bounds_hash = hashlib.md5(bounds_str.encode()).hexdigest()[:8]
-            return f"{source_name}_{height}x{width}_{bounds_hash}_{CACHE_VERSION}"
+            return f"{validated_source}_{height}x{width}_{bounds_hash}_{CACHE_VERSION}"
 
-        return f"{source_name}_{height}x{width}_{CACHE_VERSION}"
+        return f"{validated_source}_{height}x{width}_{CACHE_VERSION}"
 
     def _get_local_path(self, cache_key: str) -> Path:
-        """Get local cache file path for a given key."""
-        return self.local_cache_dir / f"{cache_key}.npz"
+        """Get local cache file path for a given key.
+
+        Includes path traversal protection by resolving and validating path.
+        """
+        local_path = (self.local_cache_dir / f"{cache_key}.npz").resolve()
+
+        # Ensure path is within cache directory (path traversal protection)
+        if not str(local_path).startswith(str(self.local_cache_dir.resolve())):
+            raise ValueError(f"Path traversal detected in cache key: {cache_key}")
+
+        return local_path
 
     def _get_s3_key(self, cache_key: str) -> str:
         """Get S3 key for a given cache key."""
@@ -397,25 +415,56 @@ class TransformCache:
         """Load transform grid from local NPZ file.
 
         Returns None if file is invalid or version mismatch.
+
+        Security: Uses allow_pickle=False to prevent arbitrary code execution
+        from malicious NPZ files. All data is stored as plain numpy arrays.
         """
         try:
-            with np.load(local_path, allow_pickle=True) as npz:
+            # SECURITY: allow_pickle=False prevents RCE from malicious NPZ files
+            with np.load(local_path, allow_pickle=False) as npz:
                 # Check version
-                version = str(npz.get("version", ""))
+                version_arr = npz.get("version")
+                if version_arr is None:
+                    logger.debug(f"No version in cache file: {local_path}")
+                    return None
+
+                # Convert numpy array to string safely
+                version = str(version_arr.item()) if version_arr.ndim == 0 else str(version_arr)
                 if version != CACHE_VERSION:
                     logger.debug(f"Cache version mismatch: {version} != {CACHE_VERSION}")
                     return None
+
+                # Load arrays and convert dict-like arrays back to dicts
+                wgs84_arr = npz["wgs84_bounds"]
+                mercator_arr = npz.get("mercator_bounds", np.array({}))
+
+                # Handle dict conversion - stored as 0-d object arrays
+                if wgs84_arr.ndim == 0:
+                    wgs84_bounds = dict(wgs84_arr.item())
+                else:
+                    wgs84_bounds = {"west": 0, "east": 0, "south": 0, "north": 0}
+
+                if mercator_arr.ndim == 0:
+                    mercator_bounds = dict(mercator_arr.item())
+                else:
+                    mercator_bounds = {}
+
+                source_arr = npz["source_name"]
+                source_name = str(source_arr.item()) if source_arr.ndim == 0 else str(source_arr)
 
                 return TransformGrid(
                     row_indices=npz["row_indices"],
                     col_indices=npz["col_indices"],
                     dst_shape=tuple(npz["dst_shape"]),
-                    wgs84_bounds=npz["wgs84_bounds"].item(),
-                    source_name=str(npz["source_name"]),
+                    wgs84_bounds=wgs84_bounds,
+                    source_name=source_name,
                     version=version,
-                    src_shape=tuple(npz.get("src_shape", (0, 0))),
-                    mercator_bounds=npz.get("mercator_bounds", np.array({})).item(),
+                    src_shape=tuple(npz.get("src_shape", np.array((0, 0)))),
+                    mercator_bounds=mercator_bounds,
                 )
+        except (KeyError, ValueError, TypeError) as e:
+            logger.debug(f"Invalid cache file format {local_path}: {e}")
+            return None
         except Exception as e:
             logger.warning(f"Failed to load transform cache from {local_path}: {e}")
             return None
@@ -442,48 +491,87 @@ class TransformCache:
         """Try to load transform grid from S3.
 
         Returns None if not found or download fails.
+
+        Security: Uses secure temp file handling with try/finally cleanup
+        and restrictive file permissions.
         """
         uploader = self._get_uploader()
         if not uploader:
             return None
 
         s3_key = self._get_s3_key(cache_key)
+        tmp_path = None
 
         try:
-            # Check if file exists
+            # Check if file exists first (avoids download attempt for missing files)
             uploader.s3_client.head_object(Bucket=uploader.bucket, Key=s3_key)
 
-            # Download to temp file
-            with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as tmp:
+            # Create temp file in cache directory (not /tmp) with secure permissions
+            with tempfile.NamedTemporaryFile(
+                suffix=".npz",
+                delete=False,
+                dir=self.local_cache_dir,
+                mode="wb",
+            ) as tmp:
                 tmp_path = Path(tmp.name)
 
+            # Set restrictive permissions (owner read/write only)
+            os.chmod(tmp_path, 0o600)
+
+            # Download to temp file
             uploader.s3_client.download_file(uploader.bucket, s3_key, str(tmp_path))
 
             # Load from temp file
             grid = self._load_from_disk(tmp_path)
 
-            # Clean up temp file
-            tmp_path.unlink(missing_ok=True)
-
             return grid
 
-        except Exception:
-            # File doesn't exist in S3 or download failed
+        except uploader.s3_client.exceptions.ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            if error_code == "404":
+                logger.debug(f"Transform cache not found in S3: {cache_key}")
+            elif error_code == "403":
+                logger.warning(f"Access denied to S3 transform cache: {cache_key}")
+            else:
+                logger.warning(f"S3 error loading transform cache: {error_code}")
             return None
+        except Exception as e:
+            logger.debug(f"Failed to load transform cache from S3: {e}")
+            return None
+        finally:
+            # Always cleanup temp file
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception as cleanup_err:
+                    logger.debug(f"Failed to cleanup temp file {tmp_path}: {cleanup_err}")
 
     def _save_to_s3(self, cache_key: str, grid: TransformGrid):
-        """Save transform grid to S3."""
+        """Save transform grid to S3.
+
+        Security: Uses secure temp file handling with try/finally cleanup.
+        """
         uploader = self._get_uploader()
         if not uploader:
             return
 
         s3_key = self._get_s3_key(cache_key)
+        tmp_path = None
 
         try:
-            # Save to temp file first
-            with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as tmp:
+            # Create temp file in cache directory with secure permissions
+            with tempfile.NamedTemporaryFile(
+                suffix=".npz",
+                delete=False,
+                dir=self.local_cache_dir,
+                mode="wb",
+            ) as tmp:
                 tmp_path = Path(tmp.name)
 
+            # Set restrictive permissions
+            os.chmod(tmp_path, 0o600)
+
+            # Save to temp file
             self._save_to_disk(tmp_path, grid)
 
             # Upload to S3
@@ -494,13 +582,18 @@ class TransformCache:
                 ExtraArgs={"ContentType": "application/octet-stream"},
             )
 
-            # Clean up temp file
-            tmp_path.unlink(missing_ok=True)
-
             logger.debug(f"Uploaded transform cache to S3: {s3_key}")
 
         except Exception as e:
-            logger.warning(f"Failed to upload transform cache to S3: {e}")
+            # Sanitize error message to avoid leaking credentials
+            logger.warning(f"Failed to upload transform cache to S3: {type(e).__name__}")
+        finally:
+            # Always cleanup temp file
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass  # Ignore cleanup errors
 
     def precompute_for_source(
         self,
