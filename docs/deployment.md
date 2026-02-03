@@ -24,8 +24,8 @@ docker run --rm \
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable from main branch |
-| `1.2.0` | Specific version |
-| `1.2` | Minor version (receives patches) |
+| `2.5.0` | Specific version |
+| `2.5` | Minor version (receives patches) |
 
 ### Volume Mounts
 
@@ -111,6 +111,39 @@ services:
       - ./outputs/czechia:/tmp/czechia
     environment:
       - TZ=Europe/Prague
+    restart: unless-stopped
+
+  # Automated OMSZ fetcher
+  omsz-fetcher:
+    image: lfranko/imeteo-radar:latest
+    container_name: omsz-fetcher
+    command: sh -c "while true; do imeteo-radar fetch --source omsz; sleep 300; done"
+    volumes:
+      - ./outputs/hungary:/tmp/hungary
+    environment:
+      - TZ=Europe/Budapest
+    restart: unless-stopped
+
+  # Automated ARSO fetcher
+  arso-fetcher:
+    image: lfranko/imeteo-radar:latest
+    container_name: arso-fetcher
+    command: sh -c "while true; do imeteo-radar fetch --source arso; sleep 300; done"
+    volumes:
+      - ./outputs/slovenia:/tmp/slovenia
+    environment:
+      - TZ=Europe/Ljubljana
+    restart: unless-stopped
+
+  # Automated IMGW fetcher
+  imgw-fetcher:
+    image: lfranko/imeteo-radar:latest
+    container_name: imgw-fetcher
+    command: sh -c "while true; do imeteo-radar fetch --source imgw; sleep 300; done"
+    volumes:
+      - ./outputs/poland:/tmp/poland
+    environment:
+      - TZ=Europe/Warsaw
     restart: unless-stopped
 
   # Composite generator (every 5 minutes)
@@ -248,6 +281,9 @@ For systems without Docker:
 */5 * * * * /usr/local/bin/imeteo-radar fetch --source dwd >> /var/log/radar-dwd.log 2>&1
 */5 * * * * /usr/local/bin/imeteo-radar fetch --source shmu >> /var/log/radar-shmu.log 2>&1
 */5 * * * * /usr/local/bin/imeteo-radar fetch --source chmi >> /var/log/radar-chmi.log 2>&1
+*/5 * * * * /usr/local/bin/imeteo-radar fetch --source omsz >> /var/log/radar-omsz.log 2>&1
+*/5 * * * * /usr/local/bin/imeteo-radar fetch --source arso >> /var/log/radar-arso.log 2>&1
+*/5 * * * * /usr/local/bin/imeteo-radar fetch --source imgw >> /var/log/radar-imgw.log 2>&1
 
 # Generate composite every 5 minutes
 */5 * * * * /usr/local/bin/imeteo-radar composite >> /var/log/radar-composite.log 2>&1
@@ -292,6 +328,9 @@ Files are uploaded to:
 s3://your-bucket/iradar/germany/{timestamp}.png
 s3://your-bucket/iradar/slovakia/{timestamp}.png
 s3://your-bucket/iradar/czechia/{timestamp}.png
+s3://your-bucket/iradar/hungary/{timestamp}.png
+s3://your-bucket/iradar/slovenia/{timestamp}.png
+s3://your-bucket/iradar/poland/{timestamp}.png
 s3://your-bucket/iradar/composite/{timestamp}.png
 ```
 
@@ -341,6 +380,9 @@ docker run --rm --user $(id -u):$(id -g) ...
   - DWD: https://opendata.dwd.de/weather/radar/composite/
   - SHMU: https://opendata.shmu.sk/
   - CHMI: https://opendata.chmi.cz/
+  - OMSZ: https://odp.met.hu/
+  - ARSO: https://vreme.arso.gov.si/
+  - IMGW: https://danepubliczne.imgw.pl/
 
 ### Upload Not Working
 

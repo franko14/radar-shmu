@@ -5,7 +5,7 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.5.0] - 2026-02-02
+## [2.5.0] - 2026-02-03
 
 ### Added
 - **Unified reprojection module** (`processing/reprojector.py`)
@@ -31,8 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `--source`: Filter operations by source (default: all)
 
 - **Composite loop helper script** (`scripts/run_composite_loop.sh`)
-  - Runs composite generation every 2 minutes for 20 minutes
+  - Runs composite generation every 2 minutes indefinitely (Ctrl+C to stop)
   - Useful for testing continuous operation and cache behavior
+
+- **Projections utility module** (`core/projections.py`)
+  - Centralized CRS constants and factory functions
+  - `get_crs_web_mercator()`, `get_crs_wgs84()`, proj4 string constants
+  - Eliminates duplicated CRS initialization across modules
 
 ### Changed
 - **Compositor refactored** to use rasterio.warp.reproject instead of scipy interpolation
@@ -56,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Individual source output directories** are now siblings of composite directory
   - If composite is `./outputs/composite/`, DWD goes to `./outputs/germany/`, etc.
+
+### Fixed
+- **Coverage mask alignment**: Rewritten to reproject directly into target grid
+  defined by extent_index.json bounds + data PNG dimensions (no intermediate grid)
+  - Replace `_reproject_coverage_to_mercator` with `_reproject_coverage_to_target`
+  - Load extent from extent_index.json instead of hardcoded SOURCE_EXTENTS
+  - Composite mask extent computed as union of all source extents
+  - Composite mask loads individual mask PNGs instead of re-downloading
+- **OMSZ 32.5 dBZ pixels**: Recovered pixels masked by netCDF4 default `_FillValue`
+  by disabling auto-masking and viewing int8 as uint8
+- **Transform cache security**: Address critical security issues in transform cache
+
+### Removed
+- Dead code: `NODATA_VALUES` dict, `_resize_coverage_to_target` function
 
 ### Documentation
 - Updated CLI examples with explicit --output paths

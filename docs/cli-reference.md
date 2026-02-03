@@ -16,6 +16,18 @@ After installation, the `imeteo-radar` command is available.
 
 ---
 
+## Global Options
+
+These options apply to all commands:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--log-level` | `DEBUG\|INFO\|WARNING\|ERROR` | `INFO` | Logging verbosity |
+| `--log-format` | `console\|json` | `console` | Log output format |
+| `--log-file` | path | - | Log to file (in addition to console) |
+
+---
+
 ## Commands Overview
 
 | Command | Description |
@@ -23,12 +35,14 @@ After installation, the `imeteo-radar` command is available.
 | `fetch` | Download and process radar data from a single source |
 | `composite` | Generate merged radar images from multiple sources |
 | `extent` | Generate geographic extent metadata files |
+| `transform-cache` | Manage precomputed reprojection transform grids |
+| `coverage-mask` | Generate coverage mask PNGs for sources |
 
 ---
 
 ## fetch
 
-Download radar data from DWD, SHMU, or CHMI and export as PNG images.
+Download radar data from any supported source and export as PNG images with Web Mercator reprojection.
 
 ### Usage
 
@@ -40,7 +54,7 @@ imeteo-radar fetch [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--source` | `dwd\|shmu\|chmi` | `dwd` | Radar data source |
+| `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw` | `dwd` | Radar data source |
 | `--output` | path | `/tmp/{country}/` | Output directory |
 | `--backload` | flag | - | Enable historical data download |
 | `--hours` | int | - | Hours to backload (requires `--backload`) |
@@ -48,6 +62,12 @@ imeteo-radar fetch [OPTIONS]
 | `--to` | string | - | End time: `"YYYY-MM-DD HH:MM"` |
 | `--update-extent` | flag | - | Force regenerate extent_index.json |
 | `--disable-upload` | flag | - | Skip cloud storage upload |
+| `--reprocess-count` | int | `6` | Number of recent timestamps to fetch (~30 min) |
+| `--cache-dir` | path | `/tmp/iradar-data` | Directory for processed data cache |
+| `--cache-ttl` | int | `60` | Cache TTL in minutes |
+| `--no-cache` | flag | - | Disable caching entirely |
+| `--no-cache-upload` | flag | - | Disable S3 cache sync (local cache only) |
+| `--clear-cache` | flag | - | Clear cache before running |
 
 ### Default Output Directories
 
@@ -56,17 +76,20 @@ imeteo-radar fetch [OPTIONS]
 | `dwd` | `/tmp/germany/` | Germany |
 | `shmu` | `/tmp/slovakia/` | Slovakia |
 | `chmi` | `/tmp/czechia/` | Czech Republic |
+| `omsz` | `/tmp/hungary/` | Hungary |
+| `arso` | `/tmp/slovenia/` | Slovenia |
+| `imgw` | `/tmp/poland/` | Poland |
 
 ### Examples
 
 ```bash
 # Download latest from each source
-imeteo-radar fetch --source dwd
-imeteo-radar fetch --source shmu
-imeteo-radar fetch --source chmi
-
-# Custom output directory
-imeteo-radar fetch --source dwd --output /data/radar/
+imeteo-radar fetch --source dwd --output ./outputs/germany
+imeteo-radar fetch --source shmu --output ./outputs/slovakia
+imeteo-radar fetch --source chmi --output ./outputs/czechia
+imeteo-radar fetch --source omsz --output ./outputs/hungary
+imeteo-radar fetch --source arso --output ./outputs/slovenia
+imeteo-radar fetch --source imgw --output ./outputs/poland
 
 # Backload last 6 hours
 imeteo-radar fetch --source dwd --backload --hours 6
@@ -80,12 +103,15 @@ imeteo-radar fetch --source dwd --disable-upload
 
 # Force regenerate extent file
 imeteo-radar fetch --source shmu --update-extent
+
+# Disable caching (always re-download)
+imeteo-radar fetch --source dwd --no-cache
 ```
 
 ### Output
 
-- **PNG files**: `{unix_timestamp}.png` (e.g., `1728221400.png`)
-- **Extent file**: `extent_index.json` (generated on first run)
+- **PNG files**: `{unix_timestamp}.png` (e.g., `1728221400.png`) — reprojected to Web Mercator
+- **Extent file**: `extent_index.json` with reprojected WGS84 bounds (matches PNG pixels exactly)
 
 ---
 
@@ -111,29 +137,36 @@ imeteo-radar composite [OPTIONS]
 | `--from` | string | - | Start time: `"YYYY-MM-DD HH:MM"` |
 | `--to` | string | - | End time: `"YYYY-MM-DD HH:MM"` |
 | `--update-extent` | flag | - | Force regenerate extent_index.json |
+| `--no-individual` | flag | - | Skip generating individual source PNGs |
 | `--disable-upload` | flag | - | Skip cloud storage upload |
+| `--timestamp-tolerance` | int | `2` | Timestamp matching tolerance in minutes |
+| `--require-arso` | flag | - | Fail if ARSO data cannot be matched |
+| `--min-core-sources` | int | `3` | Minimum core sources required for composite |
+| `--max-data-age` | int | `30` | Maximum age of data in minutes (outage threshold) |
+| `--reprocess-count` | int | `6` | Number of recent timestamps to reprocess |
+| `--cache-dir` | path | `/tmp/iradar-data` | Directory for processed data cache |
+| `--cache-ttl` | int | `60` | Cache TTL in minutes |
+| `--no-cache` | flag | - | Disable caching entirely |
+| `--no-cache-upload` | flag | - | Disable S3 cache sync (local cache only) |
+| `--clear-cache` | flag | - | Clear cache before running |
 
 ### Examples
 
 ```bash
 # Generate latest composite from all sources
-imeteo-radar composite
+imeteo-radar composite --output ./outputs/composite
 
 # Select specific sources
-imeteo-radar composite --sources dwd,shmu
+imeteo-radar composite --sources dwd,shmu,chmi
 
 # Higher resolution (1km instead of 500m)
 imeteo-radar composite --resolution 1000
 
-# Custom output directory
-imeteo-radar composite --output /data/composite/
-
 # Backload last 6 hours
 imeteo-radar composite --backload --hours 6
 
-# Backload specific time range
-imeteo-radar composite --backload \
-  --from "2024-11-10 10:00" --to "2024-11-10 12:00"
+# Skip individual source PNGs (saves memory)
+imeteo-radar composite --no-individual
 
 # Local-only mode (no cloud upload)
 imeteo-radar composite --disable-upload
@@ -142,7 +175,8 @@ imeteo-radar composite --disable-upload
 imeteo-radar composite \
   --sources dwd,shmu,chmi \
   --resolution 500 \
-  --backload --hours 3
+  --backload --hours 3 \
+  --output ./outputs/composite
 ```
 
 ### How It Works
@@ -151,19 +185,19 @@ imeteo-radar composite \
 2. **Query providers** for available timestamps
 3. **Download only new** timestamps (skip cached)
 4. **Cache downloaded data** for future runs
-5. **Match timestamps** across sources (5-minute tolerance)
-6. **Reproject** all data to Web Mercator (EPSG:3857)
+5. **Match timestamps** across sources (configurable tolerance)
+6. **Reproject** all data to Web Mercator (EPSG:3857) using rasterio
 7. **Merge** using maximum reflectivity (highest dBZ wins)
 8. **Export** as PNG with transparency
 
 ### Cache-Aware Downloading
 
-The composite command uses intelligent caching to minimize downloads:
+Both `fetch` and `composite` commands use intelligent caching to minimize downloads:
 
 ```
-[15:42:23] 📡 DWD: 8 available, 7 in cache, 1 to download
-[15:42:25] 📡 SHMU: 8 available, 7 in cache, 1 to download
-[15:42:27] 📡 ARSO: 1 available, 1 in cache, 0 to download
+DWD: 8 available, 7 in cache, 1 to download
+SHMU: 8 available, 7 in cache, 1 to download
+ARSO: 1 available, 1 in cache, 0 to download
 ```
 
 - **First run**: Downloads all available timestamps
@@ -174,21 +208,16 @@ The composite command uses intelligent caching to minimize downloads:
 
 When timestamps are not processed, the reason is logged:
 
-```
-[15:42:36] 📡 Processed 1 composite(s), skipped 5
-[15:42:36] 📡   Already exist (local/S3): 5 [20260128142000, 20260128141500, ...]
-```
-
 | Reason | Description |
 |--------|-------------|
-| `Already exist` | Composite PNG already generated |
-| `Insufficient sources` | Less than 3/5 core sources available |
+| `Already exist` | Composite PNG already generated (local or S3) |
+| `Insufficient sources` | Less than `--min-core-sources` available |
 | `Processing failed` | Error during merge/export |
 
 ### Coverage
 
-- **Combined extent**: ~2.5°E to 23.8°E, 45.5°N to 56°N
-- **Region**: Central Europe (Germany, Czech Republic, Slovakia, and surrounding areas)
+- **Combined extent**: ~2.5°E to 26.4°E, 44.0°N to 56.2°N
+- **Region**: Central Europe (Germany, Czech Republic, Slovakia, Hungary, Slovenia, Poland)
 
 ---
 
@@ -206,7 +235,7 @@ imeteo-radar extent [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--source` | `dwd\|shmu\|chmi\|all` | `all` | Source(s) to generate extent for |
+| `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw\|all` | `all` | Source(s) to generate extent for |
 | `--output` | path | `/tmp/{country}/` | Output directory |
 
 ### Examples
@@ -255,21 +284,121 @@ The `extent_index.json` file contains:
 
 ---
 
+## transform-cache
+
+Manage precomputed reprojection transform grids. These grids store pixel-to-pixel index mappings for 10-50x faster reprojection (radar extents are static).
+
+### Usage
+
+```bash
+imeteo-radar transform-cache [OPTIONS]
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--precompute` | flag | - | Precompute transform grids for sources |
+| `--download-s3` | flag | - | Download transform grids from S3 to local cache |
+| `--upload-s3` | flag | - | Upload precomputed grids to S3 |
+| `--clear-local` | flag | - | Clear local transform cache |
+| `--clear-s3` | flag | - | Clear S3 transform cache |
+| `--stats` | flag | - | Show transform cache statistics |
+| `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw\|all` | `all` | Source to operate on |
+
+### Examples
+
+```bash
+# Precompute grids for all sources
+imeteo-radar transform-cache --precompute
+
+# Precompute and upload to S3
+imeteo-radar transform-cache --precompute --upload-s3
+
+# Warm local cache from S3 (e.g., after pod restart)
+imeteo-radar transform-cache --download-s3
+
+# Show cache statistics
+imeteo-radar transform-cache --stats
+
+# Clear and rebuild
+imeteo-radar transform-cache --clear-local --precompute
+
+# Precompute for specific source
+imeteo-radar transform-cache --precompute --source dwd
+```
+
+### Cache Tiers
+
+| Tier | Location | Persistence | Speed |
+|------|----------|-------------|-------|
+| Memory | In-process | Session only | Instant |
+| Local disk | `/tmp/radar-transforms/` | Container lifetime | Fast |
+| S3/DO Spaces | Cloud storage | Permanent | Network |
+
+---
+
+## coverage-mask
+
+Generate static coverage mask PNGs showing radar coverage areas. Masks are aligned with extent_index.json for pixel-perfect overlay.
+
+### Usage
+
+```bash
+imeteo-radar coverage-mask [OPTIONS]
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw\|all` | `all` | Source to generate mask for |
+| `--composite` | flag | - | Generate composite coverage mask |
+| `--output` | path | `/tmp` | Base output directory |
+| `--resolution` | float | `500` | Resolution for composite mask in meters |
+
+### Examples
+
+```bash
+# Generate masks for all sources
+imeteo-radar coverage-mask --output ./outputs
+
+# Generate mask for single source
+imeteo-radar coverage-mask --source dwd --output ./outputs
+
+# Generate composite mask (combining all sources)
+imeteo-radar coverage-mask --composite --output ./outputs
+```
+
+### Output
+
+- **Transparent pixels**: Inside radar coverage (where data can exist)
+- **Gray pixels**: Outside radar coverage (beyond radar range)
+- **File**: `coverage_mask.png` in each source output directory
+
+---
+
 ## Output Files
 
 ### PNG Images
 
-- **Format**: 8-bit indexed PNG with alpha channel
+- **Format**: RGBA PNG with alpha channel
 - **Naming**: Unix timestamp (e.g., `1728221400.png`)
 - **Colormap**: Official SHMU colorscale (-35 to 85 dBZ)
 - **Transparency**: No-data areas are fully transparent
-- **Compression**: Maximum PNG compression (level 9)
+- **Projection**: Web Mercator (EPSG:3857) — reprojected from native source projections
 
 ### Extent Index
 
 - **File**: `extent_index.json`
-- **Purpose**: Geographic metadata for web mapping
+- **Purpose**: Geographic metadata for web mapping (reprojected WGS84 bounds)
 - **Generated**: Automatically on first run, or with `--update-extent`
+
+### Coverage Mask
+
+- **File**: `coverage_mask.png`
+- **Purpose**: Static overlay showing radar coverage area
+- **Generated**: Via `coverage-mask` command
 
 ---
 
@@ -291,7 +420,7 @@ The `extent_index.json` file contains:
 - **CHMI**: https://opendata.chmi.cz/
 - **OMSZ**: https://odp.met.hu/
 - **ARSO**: https://vreme.arso.gov.si/
-- **IMGW**: https://meteo.imgw.pl/
+- **IMGW**: https://danepubliczne.imgw.pl/
 
 ---
 
@@ -331,4 +460,6 @@ imeteo-radar --help
 imeteo-radar fetch --help
 imeteo-radar composite --help
 imeteo-radar extent --help
+imeteo-radar transform-cache --help
+imeteo-radar coverage-mask --help
 ```

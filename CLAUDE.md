@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-iMeteo Radar is a multi-source weather radar data processing system that handles DWD (Germany), SHMU (Slovakia), and CHMI (Czech Republic) radar data. The system downloads ODIM_H5 format radar data, processes it with proper colorscaling and transparency, and exports PNG images suitable for web mapping applications. Supports composite radar images that merge data from multiple sources.
+iMeteo Radar is a multi-source weather radar data processing system that handles DWD (Germany), SHMU (Slovakia), CHMI (Czech Republic), OMSZ (Hungary), ARSO (Slovenia), and IMGW (Poland) radar data. The system downloads ODIM_H5/netCDF/SRD-3 format radar data, reprojects it to Web Mercator using rasterio, and exports PNG images suitable for web mapping applications. Supports composite radar images that merge data from multiple sources, with three-tier transform caching for fast reprojection.
 
 ## Project Structure
 
@@ -16,6 +16,7 @@ graph LR
             PROC["processing/"]
             CORE["core/"]
             CONF["config/"]
+            UTIL["utils/"]
         end
         SCRIPTS["scripts/"]
         TESTS["tests/"]
@@ -40,6 +41,13 @@ imeteo-radar composite --output ./outputs/composite
 
 # Generate extent metadata
 imeteo-radar extent --source all
+
+# Generate coverage masks
+imeteo-radar coverage-mask --output ./outputs
+
+# Manage transform cache
+imeteo-radar transform-cache --precompute
+imeteo-radar transform-cache --stats
 
 # Backload historical data
 imeteo-radar fetch --source dwd --backload --hours 6 --output ./outputs/germany
