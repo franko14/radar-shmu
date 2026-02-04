@@ -7,7 +7,6 @@ that was previously duplicated across source classes.
 """
 
 from datetime import datetime, timedelta
-from typing import Callable
 
 import pytz
 
@@ -290,10 +289,10 @@ def is_timestamp_in_cache(timestamp: str, cached_set: set[str]) -> bool:
     ts_14 = ts_12 + "00" if len(ts_clean) <= 12 else ts_clean[:14]
 
     return (
-        timestamp in cached_set or
-        ts_clean in cached_set or
-        ts_12 in cached_set or
-        ts_14 in cached_set
+        timestamp in cached_set
+        or ts_clean in cached_set
+        or ts_12 in cached_set
+        or ts_14 in cached_set
     )
 
 

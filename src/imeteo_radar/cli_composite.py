@@ -7,7 +7,7 @@ Separated into its own module to keep cli.py manageable.
 
 import gc
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .core.logging import get_logger
 from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
@@ -17,12 +17,12 @@ logger = get_logger(__name__)
 
 # Fixed reference extent covering all sources (DWD, SHMU, CHMI, OMSZ, ARSO, IMGW)
 # Using this ensures consistent composite dimensions regardless of which sources are available
-# Calculated from the union of all source extents
+# Values are the union of all source reprojected WGS84 bounds (from extent_index.json)
 REFERENCE_EXTENT = {
-    "west": 2.50,   # DWD westernmost
-    "east": 26.40,  # IMGW easternmost
-    "south": 44.00, # OMSZ southernmost
-    "north": 56.20, # IMGW northernmost
+    "west": 1.461077,  # DWD (westernmost)
+    "east": 26.376516,  # IMGW (easternmost)
+    "south": 44.001479,  # OMSZ (southernmost)
+    "north": 56.398335,  # IMGW (northernmost)
 }
 
 # Source classification for outage detection
@@ -119,17 +119,28 @@ def _detect_source_outages(
         if data_age > max_age:
             # Stale data - OUTAGE
             availability[source_name] = False
-            reasons[source_name] = f"stale data (age: {age_minutes} min, max: {max_data_age_minutes} min)"
+            reasons[source_name] = (
+                f"stale data (age: {age_minutes} min, max: {max_data_age_minutes} min)"
+            )
             logger.warning(
                 f"  {source_name.upper()}: OUTAGE (stale data, age: {age_minutes} min)",
-                extra={"source": source_name, "status": "outage", "age_min": age_minutes},
+                extra={
+                    "source": source_name,
+                    "status": "outage",
+                    "age_min": age_minutes,
+                },
             )
         else:
             # Available
             availability[source_name] = True
             logger.info(
                 f"  {source_name.upper()}: AVAILABLE (newest: {newest_ts}, age: {age_minutes} min)",
-                extra={"source": source_name, "status": "available", "timestamp": newest_ts, "age_min": age_minutes},
+                extra={
+                    "source": source_name,
+                    "status": "available",
+                    "timestamp": newest_ts,
+                    "age_min": age_minutes,
+                },
             )
 
     return availability, reasons
@@ -151,9 +162,7 @@ def _count_available_core_sources(availability: dict[str, bool]) -> tuple[int, i
     return available_core, total_core
 
 
-def _filter_available_sources(
-    sources: dict, availability: dict[str, bool]
-) -> dict:
+def _filter_available_sources(sources: dict, availability: dict[str, bool]) -> dict:
     """Filter sources to only include available ones.
 
     Args:
@@ -416,14 +425,18 @@ def _find_multiple_common_timestamps(
                         sources_in_window[source_name] = (ts_str, file_info, ts_dt)
                     else:
                         # Keep the closer timestamp
-                        existing_ts, existing_info, existing_dt = sources_in_window[source_name]
+                        existing_ts, existing_info, existing_dt = sources_in_window[
+                            source_name
+                        ]
                         if abs(ts_dt - candidate_dt) < abs(existing_dt - candidate_dt):
                             sources_in_window[source_name] = (ts_str, file_info, ts_dt)
 
         # Check if we have enough sources
         if len(sources_in_window) >= min_sources:
             processed_windows.add(window_key)
-            source_files = {src: info for src, (_, info, _) in sources_in_window.items()}
+            source_files = {
+                src: info for src, (_, info, _) in sources_in_window.items()
+            }
             results.append((candidate_ts, source_files))
             logger.debug(
                 f"Found common timestamp {candidate_ts} with {len(source_files)} sources"
@@ -465,24 +478,12 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     reprocess_count = getattr(args, "reprocess_count", DEFAULT_REPROCESS_COUNT)
     tolerance = getattr(args, "timestamp_tolerance", 2)
 
-    # Initialize processed data cache
-    cache = None
-    if not getattr(args, "no_cache", False):
-        from .utils.processed_cache import ProcessedDataCache
+    # Initialize processed data cache using shared helper
+    from .utils.cli_helpers import init_cache_from_args
 
-        s3_enabled = not getattr(args, "no_cache_upload", False)
-        cache = ProcessedDataCache(
-            local_dir=getattr(args, "cache_dir", Path("/tmp/iradar-data")),
-            ttl_minutes=getattr(args, "cache_ttl", 60),
-            s3_enabled=s3_enabled,
-        )
-
-        if getattr(args, "clear_cache", False):
-            cleared = cache.clear()
-            logger.info(f"Cleared {cleared} cache entries")
-
-        # Cleanup expired entries on startup
-        cache.cleanup_expired()
+    cache = init_cache_from_args(
+        args, upload_enabled=not getattr(args, "disable_upload", False)
+    )
 
     # ========== STEP 1: DOWNLOAD DATA FROM ALL SOURCES ==========
     logger.info("Downloading data from all sources...")
@@ -537,7 +538,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         )
 
         if not available_timestamps:
-            logger.warning(f"{source_name.upper()}: No timestamps available from provider")
+            logger.warning(
+                f"{source_name.upper()}: No timestamps available from provider"
+            )
             all_source_files[source_name] = []
             continue
 
@@ -582,7 +585,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                             del radar_data
                             gc.collect()
                         except Exception as e:
-                            logger.debug(f"Could not cache {source_name} {timestamp}: {e}")
+                            logger.debug(
+                                f"Could not cache {source_name} {timestamp}: {e}"
+                            )
 
         # Build cached file info entries for outage detection
         cached_file_infos = []
@@ -605,7 +610,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         all_source_files[source_name] = downloaded_files + cached_file_infos
 
         if not timestamps_to_download and timestamps_from_cache:
-            logger.debug(f"  {source_name.upper()}: Using cached data, no download needed")
+            logger.debug(
+                f"  {source_name.upper()}: Using cached data, no download needed"
+            )
 
     # Re-add any cached timestamps not already in timestamp_groups
     if cache:
@@ -635,7 +642,8 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
             recent = source_timestamps[:3]
             # Count downloads: either not from_cache, or was_downloaded (cached after download this run)
             download_count = sum(
-                1 for ts in source_timestamps
+                1
+                for ts in source_timestamps
                 if not timestamp_groups[ts][source_name].get("from_cache", False)
                 or timestamp_groups[ts][source_name].get("was_downloaded", False)
             )
@@ -653,8 +661,6 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         sources, all_source_files, max_data_age
     )
 
-    # Count available sources
-    available_count = sum(1 for v in availability.values() if v)
     outage_count = sum(1 for v in availability.values() if not v)
 
     if outage_count > 0:
@@ -668,8 +674,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
 
     if available_core < min_core_sources:
         unavailable_core = [
-            s.upper() for s in CORE_SOURCES
-            if s in availability and not availability[s]
+            s.upper() for s in CORE_SOURCES if s in availability and not availability[s]
         ]
         logger.error(
             f"Only {available_core}/{total_core} core sources available "
@@ -730,7 +735,11 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     )
 
     # If no full matches and ARSO is included, try without ARSO
-    if not common_timestamps and "arso" in available_sources and len(available_sources) > 2:
+    if (
+        not common_timestamps
+        and "arso" in available_sources
+        and len(available_sources) > 2
+    ):
         logger.info("No common timestamps with ARSO, retrying without ARSO...")
         logger.info("   (ARSO only provides single latest timestamp)")
 
@@ -797,24 +806,16 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         output_path = output_dir / filename
 
         # Check if composite already exists locally or in S3 (skip if unchanged)
-        exists_locally = output_path.exists()
-        exists_in_s3 = False
-        if not exists_locally and uploader:
-            try:
-                exists_in_s3 = uploader.file_exists("composite", filename)
-            except Exception:
-                pass  # S3 check failed, proceed with processing
+        from .utils.cli_helpers import output_exists
 
-        if exists_locally or exists_in_s3:
+        if output_exists(output_path, "composite", filename, uploader):
             skip_reasons["already_exists"].append(common_timestamp)
             continue
 
         logger.info(f"Processing timestamp {common_timestamp}...")
 
         # Filter source_files to only include available sources
-        source_files = {
-            k: v for k, v in source_files.items() if k in available_sources
-        }
+        source_files = {k: v for k, v in source_files.items() if k in available_sources}
 
         if len(source_files) < min_core_sources:
             skip_reasons["insufficient_sources"].append(
@@ -906,9 +907,13 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 gc.collect()
 
                 # Delete temp file if not from cache
-                if not from_cache and "file_path" in source_metadata.get(source_name, {}):
+                if not from_cache and "file_path" in source_metadata.get(
+                    source_name, {}
+                ):
                     try:
-                        Path(source_metadata[source_name]["file_path"]).unlink(missing_ok=True)
+                        Path(source_metadata[source_name]["file_path"]).unlink(
+                            missing_ok=True
+                        )
                     except Exception:
                         pass
 
@@ -936,16 +941,16 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 "source": "composite",
                 "units": "dBZ",
             }
-            exporter.export_png_fast(
+            # Composite data is already in Web Mercator, no reprojection needed
+            exporter.export_png(
                 radar_data=radar_data_for_export,
                 output_path=output_path,
                 extent={"wgs84": composite["extent"]},
                 colormap_type="shmu",
+                reproject=False,  # Already in Web Mercator
             )
 
-            logger.info(
-                f"Composite saved: {filename} ({sources_processed} sources)"
-            )
+            logger.info(f"Composite saved: {filename} ({sources_processed} sources)")
 
             # Upload composite to DigitalOcean Spaces
             if uploader:
@@ -968,15 +973,27 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         except Exception as e:
             logger.error(f"Failed to create composite for {common_timestamp}: {e}")
             import traceback
+
             traceback.print_exc()
 
     # Update extent index if processed any composites
     if processed_count > 0:
-        if args.update_extent or not (output_dir / "extent_index.json").exists():
+        extent_path = Path("/tmp/iradar-data/extent/composite/extent_index.json")
+        if args.update_extent or not extent_path.exists():
             if last_composite is not None:
                 _save_extent_index(
-                    output_dir, last_composite, list(available_sources.keys()), args.resolution
+                    output_dir,
+                    last_composite,
+                    list(available_sources.keys()),
+                    args.resolution,
+                    uploader=uploader,
                 )
+
+    # Auto-generate coverage masks if missing (first run)
+    # Use ALL configured sources, not just available ones — ARSO may be dropped
+    # from composite matching but still needs a coverage mask
+    if processed_count > 0 and not args.no_individual:
+        _auto_generate_masks_if_missing(list(sources.keys()), args, output_dir)
 
     # Log processing summary with skip reasons
     total_skipped = sum(len(v) for v in skip_reasons.values())
@@ -1001,7 +1018,51 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
             f"[{', '.join(skip_reasons['processing_failed'][:3])}]"
         )
 
+    # Export individual ARSO images when dropped from composite timestamp matching
+    if arso_dropped and not args.no_individual and "arso" in sources:
+        _export_dropped_arso(
+            sources,
+            all_source_files,
+            cache,
+            exporter,
+            args,
+            uploader,
+        )
+
     return 0
+
+
+def _get_individual_source_dir(source_name: str, composite_output: Path) -> Path:
+    """Get output directory for individual source images.
+
+    Individual sources are saved as siblings of the composite directory:
+    - If composite output is ./outputs/composite/
+    - Then DWD goes to ./outputs/germany/, SHMU to ./outputs/slovakia/, etc.
+
+    Args:
+        source_name: Source identifier (e.g., 'dwd', 'shmu')
+        composite_output: Path to composite output directory
+
+    Returns:
+        Path to individual source output directory
+    """
+    # Map source names to country folder names
+    source_to_country = {
+        "dwd": "germany",
+        "shmu": "slovakia",
+        "chmi": "czechia",
+        "arso": "slovenia",
+        "omsz": "hungary",
+        "imgw": "poland",
+    }
+
+    country = source_to_country.get(source_name)
+    if not country:
+        return None
+
+    # Individual sources are siblings of composite directory
+    base_dir = composite_output.parent
+    return base_dir / country
 
 
 def _export_individual_sources(
@@ -1009,13 +1070,14 @@ def _export_individual_sources(
 ):
     """Export individual source images with their native extents.
 
-    Each source is exported to its own directory:
-    - DWD -> /tmp/germany/
-    - SHMU -> /tmp/slovakia/
-    - CHMI -> /tmp/czechia/
-    - ARSO -> /tmp/slovenia/
-    - OMSZ -> /tmp/hungary/
-    - IMGW -> /tmp/poland/
+    Each source is exported to a sibling directory of the composite output:
+    - If composite is ./outputs/composite/
+    - DWD -> ./outputs/germany/
+    - SHMU -> ./outputs/slovakia/
+    - CHMI -> ./outputs/czechia/
+    - ARSO -> ./outputs/slovenia/
+    - OMSZ -> ./outputs/hungary/
+    - IMGW -> ./outputs/poland/
 
     Args:
         sources_data: List of (source_name, radar_data) tuples
@@ -1026,20 +1088,13 @@ def _export_individual_sources(
         uploader: Optional SpacesUploader instance for uploading to DO Spaces
     """
     import json
+    from datetime import datetime
 
-    # Source name to output directory mapping
-    source_dirs = {
-        "dwd": Path("/tmp/germany/"),
-        "shmu": Path("/tmp/slovakia/"),
-        "chmi": Path("/tmp/czechia/"),
-        "arso": Path("/tmp/slovenia"),
-        "omsz": Path("/tmp/hungary/"),
-        "imgw": Path("/tmp/poland/"),
-    }
+    composite_output = Path(args.output)
 
     for source_name, radar_data in sources_data:
-        # Get output directory for this source
-        source_output_dir = source_dirs.get(source_name)
+        # Get output directory for this source (sibling of composite dir)
+        source_output_dir = _get_individual_source_dir(source_name, composite_output)
         if source_output_dir is None:
             logger.warning(f"Unknown source {source_name}, skipping individual export")
             continue
@@ -1051,23 +1106,26 @@ def _export_individual_sources(
         filename = f"{unix_timestamp}.png"
         output_path = source_output_dir / filename
 
-        # Prepare radar data for export
-        radar_data_for_export = {
-            "data": radar_data["data"],
-            "timestamp": timestamp_str,
-            "product": radar_data.get("product", "unknown"),
-            "source": source_name,
-            "units": "dBZ",
-            "metadata": radar_data.get("metadata", {}),
-        }
+        # Use radar_data directly - it contains data, extent, and projection info
+        # needed for proper reprojection to Web Mercator
+        radar_data["timestamp"] = timestamp_str
+        radar_data["metadata"] = radar_data.get("metadata", {})
+        radar_data["metadata"]["source"] = source_name
+        radar_data["metadata"]["units"] = "dBZ"
 
-        # Export to PNG with native extent
+        # Export to PNG with reprojection to Web Mercator
         logger.info(f"{source_name.upper()} -> {output_path}")
-        exporter.export_png_fast(
-            radar_data=radar_data_for_export,
+        _, export_metadata = exporter.export_png(
+            radar_data=radar_data,
             output_path=output_path,
             extent=radar_data["extent"],
             colormap_type="shmu",
+            reproject=True,  # Reproject to EPSG:3857 for proper positioning
+        )
+
+        # Get the REPROJECTED bounds from export metadata (not native bounds)
+        reprojected_extent = export_metadata.get(
+            "extent", radar_data.get("extent", {}).get("wgs84", {})
         )
 
         # Upload individual source to DigitalOcean Spaces
@@ -1078,16 +1136,18 @@ def _export_individual_sources(
             except Exception as e:
                 logger.warning(f"Failed to upload {source_name}: {e}")
 
-        # Save extent_index.json if it doesn't exist
-        extent_file = source_output_dir / "extent_index.json"
+        # Save extent_index.json with REPROJECTED bounds (canonical format)
+        extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
+        extent_dir.mkdir(parents=True, exist_ok=True)
+        extent_file = extent_dir / "extent_index.json"
         if not extent_file.exists() or args.update_extent:
             extent_data = {
                 "metadata": {
                     "title": f"{source_name.upper()} Radar Coverage",
-                    "description": f"Native extent for {source_name.upper()} radar data",
                     "source": source_name,
+                    "generated": datetime.now().isoformat() + "Z",
                 },
-                "extent": radar_data["extent"],
+                "wgs84": reprojected_extent,
             }
             with open(extent_file, "w") as f:
                 json.dump(extent_data, f, indent=2)
@@ -1108,6 +1168,9 @@ def _export_single_source(
     This function is used in the two-pass architecture to export individual
     source images while processing sources one at a time.
 
+    Individual sources are saved as siblings of the composite directory:
+    - If composite is ./outputs/composite/, DWD goes to ./outputs/germany/
+
     Args:
         source_name: Source identifier (e.g., 'dwd', 'shmu')
         radar_data: Dictionary from source.process_to_array()
@@ -1119,17 +1182,9 @@ def _export_single_source(
     """
     import json
 
-    # Source name to output directory mapping
-    source_dirs = {
-        "dwd": Path("/tmp/germany/"),
-        "shmu": Path("/tmp/slovakia/"),
-        "chmi": Path("/tmp/czechia/"),
-        "arso": Path("/tmp/slovenia/"),
-        "omsz": Path("/tmp/hungary/"),
-        "imgw": Path("/tmp/poland/"),
-    }
-
-    output_dir = source_dirs.get(source_name)
+    # Get output directory (sibling of composite dir)
+    composite_output = Path(args.output)
+    output_dir = _get_individual_source_dir(source_name, composite_output)
     if not output_dir:
         return
 
@@ -1139,24 +1194,27 @@ def _export_single_source(
     # Generate filename
     output_path = output_dir / f"{unix_timestamp}.png"
 
-    # Prepare radar data for export
-    radar_data_for_export = {
-        "data": radar_data["data"],
-        "timestamp": timestamp_str,
-        "product": radar_data.get("metadata", {}).get("product", "unknown"),
-        "source": source_name,
-        "units": "dBZ",
-        "metadata": radar_data.get("metadata", {}),
-    }
+    # Use radar_data directly - it contains data, extent, and projection info
+    # needed for proper reprojection to Web Mercator
+    radar_data["timestamp"] = timestamp_str
+    radar_data["metadata"] = radar_data.get("metadata", {})
+    radar_data["metadata"]["source"] = source_name
+    radar_data["metadata"]["units"] = "dBZ"
 
-    # Export to PNG with native extent
+    # Export to PNG with reprojection to Web Mercator
     filename = f"{unix_timestamp}.png"
     logger.debug(f"{source_name.upper()} -> {output_path}")
-    exporter.export_png_fast(
-        radar_data=radar_data_for_export,
+    _, export_metadata = exporter.export_png(
+        radar_data=radar_data,
         output_path=output_path,
         extent=radar_data["extent"],
         colormap_type="shmu",
+        reproject=True,  # Reproject to EPSG:3857 for proper positioning
+    )
+
+    # Get the REPROJECTED bounds from export metadata (not native bounds)
+    reprojected_extent = export_metadata.get(
+        "extent", radar_data.get("extent", {}).get("wgs84", {})
     )
 
     # Upload individual source to DigitalOcean Spaces
@@ -1167,19 +1225,180 @@ def _export_single_source(
         except Exception as e:
             logger.warning(f"Failed to upload {source_name}: {e}")
 
-    # Save extent_index.json if it doesn't exist
-    extent_file = output_dir / "extent_index.json"
+    # Save extent_index.json with REPROJECTED bounds (canonical format)
+    extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
+    extent_dir.mkdir(parents=True, exist_ok=True)
+    extent_file = extent_dir / "extent_index.json"
     if not extent_file.exists() or args.update_extent:
+        from datetime import datetime
+
         extent_data = {
             "metadata": {
                 "title": f"{source_name.upper()} Radar Coverage",
-                "description": f"Native extent for {source_name.upper()} radar data",
                 "source": source_name,
+                "generated": datetime.now().isoformat() + "Z",
             },
-            "extent": radar_data["extent"],
+            "wgs84": reprojected_extent,
         }
         with open(extent_file, "w") as f:
             json.dump(extent_data, f, indent=2)
+
+        # Upload extent to S3
+        if uploader:
+            s3_key = f"iradar-data/extent/{source_name}/extent_index.json"
+            uploader.upload_metadata(
+                extent_file, s3_key, content_type="application/json"
+            )
+
+
+def _auto_generate_masks_if_missing(
+    source_names: list[str],
+    args,
+    composite_output: Path,
+) -> None:
+    """Auto-generate coverage masks on first run if they don't exist.
+
+    Checks for missing individual source masks and composite mask,
+    generating them from extent data when available. This eliminates the
+    need for a separate `imeteo-radar coverage-mask` command on first run.
+
+    Args:
+        source_names: List of ALL source identifiers to check (not just available)
+        args: CLI arguments (needs args.resolution)
+        composite_output: Path to composite output directory (e.g., ./outputs/composite)
+    """
+    from .processing.coverage_mask import (
+        generate_composite_coverage_mask,
+        generate_source_coverage_mask,
+    )
+
+    any_generated = False
+
+    # Check individual source masks for ALL sources
+    for source_name in source_names:
+        mask_path = Path(f"/tmp/iradar-data/mask/{source_name}/coverage_mask.png")
+        if not mask_path.exists():
+            extent_path = Path(
+                f"/tmp/iradar-data/extent/{source_name}/extent_index.json"
+            )
+            if extent_path.exists():
+                # Resolve the actual PNG directory (sibling of composite dir)
+                png_dir = _get_individual_source_dir(source_name, composite_output)
+                if png_dir is None:
+                    continue
+                try:
+                    result = generate_source_coverage_mask(
+                        source_name,
+                        png_dir=str(png_dir),
+                    )
+                    if result:
+                        any_generated = True
+                        logger.info(f"Auto-generated coverage mask for {source_name}")
+                except Exception as e:
+                    logger.debug(f"Could not auto-generate mask for {source_name}: {e}")
+
+    # Check composite mask
+    composite_mask = Path("/tmp/iradar-data/mask/composite/coverage_mask.png")
+    if not composite_mask.exists():
+        composite_extent = Path("/tmp/iradar-data/extent/composite/extent_index.json")
+        if composite_extent.exists():
+            try:
+                result = generate_composite_coverage_mask(
+                    sources=source_names,
+                    output_base_dir=str(composite_output.parent),
+                    resolution_m=args.resolution,
+                )
+                if result:
+                    any_generated = True
+                    logger.info("Auto-generated composite coverage mask")
+            except Exception as e:
+                logger.debug(f"Could not auto-generate composite mask: {e}")
+
+    if any_generated:
+        logger.info("Coverage masks generated (first run)")
+
+
+def _export_dropped_arso(sources, all_source_files, cache, exporter, args, uploader):
+    """Export individual ARSO images when ARSO was dropped from composite matching.
+
+    ARSO data is cached in Step 4 of _process_latest(). When ARSO's timestamp
+    doesn't match other sources, it's excluded from the composite but the data
+    is still available in cache. This function loads it back and exports
+    individual PNGs so ARSO coverage is still visible on the map.
+
+    Args:
+        sources: Dict of source configurations {name: (source_obj, product)}
+        all_source_files: Dict of downloaded files {name: [file_info, ...]}
+        cache: ProcessedDataCache instance (or None)
+        exporter: PNGExporter instance
+        args: CLI arguments
+        uploader: Optional SpacesUploader instance
+    """
+    from datetime import datetime
+
+    import pytz
+
+    arso_source, arso_product = sources["arso"]
+
+    if "arso" not in all_source_files or not all_source_files["arso"]:
+        return
+
+    from .utils.cli_helpers import output_exists
+
+    exported_count = 0
+    for arso_file in all_source_files["arso"]:
+        ts = arso_file["timestamp"]
+        try:
+            dt = datetime.strptime(ts[:14], "%Y%m%d%H%M%S")
+        except ValueError:
+            try:
+                dt = datetime.strptime(ts[:12], "%Y%m%d%H%M")
+            except ValueError:
+                continue
+        dt_utc = pytz.UTC.localize(dt)
+        unix_ts = int(dt_utc.timestamp())
+
+        # Skip if already exported (e.g., from a previous run)
+        composite_output = Path(args.output)
+        arso_output_dir = _get_individual_source_dir("arso", composite_output)
+        if arso_output_dir:
+            arso_filename = f"{unix_ts}.png"
+            arso_output_path = arso_output_dir / arso_filename
+            if output_exists(arso_output_path, "arso", arso_filename, uploader):
+                continue
+
+        # Load from cache or process from file
+        radar_data = None
+        if arso_file.get("from_cache") and cache:
+            radar_data = cache.get("arso", ts, arso_product)
+        elif arso_file.get("path"):
+            try:
+                radar_data = arso_source.process_to_array(arso_file["path"])
+            except Exception as e:
+                logger.warning(f"Failed to process ARSO file: {e}")
+                continue
+
+        if radar_data is None:
+            continue
+
+        _export_single_source(
+            "arso",
+            radar_data,
+            exporter,
+            unix_ts,
+            ts,
+            args,
+            uploader,
+        )
+        exported_count += 1
+        del radar_data
+        gc.collect()
+
+    if exported_count > 0:
+        logger.info(
+            f"Exported {exported_count} individual ARSO image(s) "
+            "(excluded from composite due to timestamp mismatch)"
+        )
 
 
 def _process_backload(args, sources, exporter, output_dir, uploader=None):
@@ -1360,11 +1579,13 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
                 "source": "composite",
                 "units": "dBZ",
             }
-            exporter.export_png_fast(
+            # Composite data is already in Web Mercator, no reprojection needed
+            exporter.export_png(
                 radar_data=radar_data_for_export,
                 output_path=output_path,
                 extent={"wgs84": composite["extent"]},
                 colormap_type="shmu",
+                reproject=False,  # Already in Web Mercator
             )
 
             # Upload composite to DigitalOcean Spaces
@@ -1400,32 +1621,59 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
     if args.update_extent or processed_count > 0:
         if last_composite is not None:
             _save_extent_index(
-                output_dir, last_composite, list(sources.keys()), args.resolution
+                output_dir,
+                last_composite,
+                list(sources.keys()),
+                args.resolution,
+                uploader=uploader,
             )
+
+    # Auto-generate coverage masks if missing (first run)
+    if processed_count > 0 and not args.no_individual:
+        _auto_generate_masks_if_missing(list(sources.keys()), args, output_dir)
 
     return 0
 
 
-def _save_extent_index(output_dir, composite, source_names, resolution):
-    """Save extent index JSON"""
+def _save_extent_index(_output_dir, composite, source_names, resolution, uploader=None):
+    """Save extent index JSON in canonical format to iradar-data/extent/composite/.
+
+    Canonical format:
+    {
+      "metadata": { "title": "...", "source": "composite", "generated": "..." },
+      "wgs84": { "west": ..., "east": ..., "south": ..., "north": ... }
+    }
+    """
     import json
     from datetime import datetime
 
     logger.info("Generating extent information...")
 
+    # composite["extent"] is {"wgs84": {...}} — extract the wgs84 dict
+    wgs84 = composite["extent"]
+    if isinstance(wgs84, dict) and "wgs84" in wgs84:
+        wgs84 = wgs84["wgs84"]
+
     extent_data = {
         "metadata": {
             "title": "Composite Radar Coverage",
-            "description": f"Combined extent from sources: {', '.join(source_names)}",
+            "source": "composite",
             "generated": datetime.now().isoformat() + "Z",
             "sources": source_names,
             "resolution_m": resolution,
         },
-        "extent": composite["extent"],
+        "wgs84": wgs84,
     }
 
-    extent_path = output_dir / "extent_index.json"
+    extent_dir = Path("/tmp/iradar-data/extent/composite")
+    extent_dir.mkdir(parents=True, exist_ok=True)
+    extent_path = extent_dir / "extent_index.json"
     with open(extent_path, "w") as f:
         json.dump(extent_data, f, indent=2)
 
     logger.info(f"Extent info saved to {extent_path}")
+
+    # Upload to S3 if uploader available
+    if uploader:
+        s3_key = "iradar-data/extent/composite/extent_index.json"
+        uploader.upload_metadata(extent_path, s3_key, content_type="application/json")

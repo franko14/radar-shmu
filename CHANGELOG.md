@@ -5,6 +5,121 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-02-04
+
+### Changed
+- **Modernized type annotations** to Python 3.10+ syntax across core modules
+  - `Optional[X]` → `X | None`, `Dict` → `dict`, `List` → `list`, `Tuple` → `tuple`
+  - `typing.Callable` → `collections.abc.Callable`
+
+### Fixed
+- **Exception chaining**: Added `from e` to all re-raised exceptions across 8 modules
+  for proper traceback visibility
+- **Warning stacklevel**: Added `stacklevel=2` to all `warnings.warn()` calls in
+  `core/projection.py` so warnings point to the caller
+
+### Removed
+- Unused imports: `execute_parallel_downloads` (5 sources), `get_crs_web_mercator`,
+  `timedelta`, `Optional`, `field`
+- Unused variable `available_count` in composite CLI
+- Applied Black formatting across all 24 source files
+
+## [2.5.0] - 2026-02-03
+
+### Added
+- **Unified reprojection module** (`processing/reprojector.py`)
+  - `reproject_to_web_mercator()`: Simple reprojection from extent bounds
+  - `reproject_to_web_mercator_accurate()`: Uses calculate_default_transform for GeoTIFF-accurate bounds
+  - `build_native_params_from_projection_info()`: Extract CRS/transform from ODIM_H5 metadata
+  - Handles stereographic (DWD), mercator (SHMU/CHMI), azimuthal (IMGW), and WGS84 sources
+
+- **Three-tier transform cache** (`processing/transform_cache.py`) for 10-50x faster reprojection
+  - Tier 1: Memory (instant, same process)
+  - Tier 2: Local disk (/tmp/radar-transforms) - persists in container
+  - Tier 3: S3/DO Spaces - persists across pod restarts
+  - Precomputes pixel-to-pixel index mappings (radar extents are static)
+  - Uses int16 indices (~4 bytes/pixel) for memory efficiency
+  - `fast_reproject()` function for numpy array indexing speedup
+
+- **New `transform-cache` CLI command** for cache management
+  - `--precompute`: Generate transform grids for sources
+  - `--download-s3`: Warm local cache from S3
+  - `--upload-s3`: Upload grids to S3 (use with --precompute)
+  - `--clear-local` / `--clear-s3`: Clear cache tiers
+  - `--stats`: Show cache statistics by tier and source
+  - `--source`: Filter operations by source (default: all)
+
+- **Composite loop helper script** (`scripts/run_composite_loop.sh`)
+  - Runs composite generation every 2 minutes indefinitely (Ctrl+C to stop)
+  - Useful for testing continuous operation and cache behavior
+
+- **Projections utility module** (`core/projections.py`)
+  - Centralized CRS constants and factory functions
+  - `get_crs_web_mercator()`, `get_crs_wgs84()`, proj4 string constants
+  - Eliminates duplicated CRS initialization across modules
+
+### Changed
+- **Compositor refactored** to use rasterio.warp.reproject instead of scipy interpolation
+  - Fixes positioning errors from incorrect coordinate system handling
+  - Proper handling of HDF5 pixel-center coordinates
+  - Lazy-initialize CRS objects using proj4 strings
+
+- **PNG exporter** now supports reprojection with caching
+  - New `reproject` parameter (default True) enables Web Mercator reprojection
+  - New `use_cached_transform` parameter (default True) uses precomputed grids
+  - Returns reprojected WGS84 bounds in metadata for Leaflet overlays
+
+- **All 6 sources updated** with projection info and accurate extents
+  - Replace coordinates-based approach with projection info dictionaries
+  - Extents now match validation GeoTIFFs exactly
+  - DWD, SHMU, CHMI, OMSZ, IMGW, ARSO all updated
+
+- **Fetch and composite commands** now enable reprojection for individual source exports
+  - Pass radar_data with projection info to exporter
+  - extent_index.json uses REPROJECTED bounds (matches PNG exactly)
+
+- **Individual source output directories** are now siblings of composite directory
+  - If composite is `./outputs/composite/`, DWD goes to `./outputs/germany/`, etc.
+
+### Fixed
+- **Coverage mask alignment**: Rewritten to reproject directly into target grid
+  defined by extent_index.json bounds + data PNG dimensions (no intermediate grid)
+  - Replace `_reproject_coverage_to_mercator` with `_reproject_coverage_to_target`
+  - Load extent from extent_index.json instead of hardcoded SOURCE_EXTENTS
+  - Composite mask extent computed as union of all source extents
+  - Composite mask loads individual mask PNGs instead of re-downloading
+- **OMSZ 32.5 dBZ pixels**: Recovered pixels masked by netCDF4 default `_FillValue`
+  by disabling auto-masking and viewing int8 as uint8
+- **Transform cache security**: Address critical security issues in transform cache
+
+### Removed
+- Dead code: `NODATA_VALUES` dict, `_resize_coverage_to_target` function
+
+### Documentation
+- Updated CLI examples with explicit --output paths
+- Documented output directory structure
+
+## [2.4.0] - 2026-01-29
+
+### Added
+- **Cache-aware fetching for single source commands** (`fetch` command)
+  - New `--reprocess-count` argument (default: 6 = 30 minutes)
+  - Full cache integration: `--cache-dir`, `--cache-ttl`, `--no-cache`, `--clear-cache`, `--no-cache-upload`
+  - Multi-timestamp fetching instead of single latest timestamp
+  - Skip redundant downloads (cached timestamps) and uploads (S3 existence check)
+  - Mirrors the robust pattern already implemented in composite command
+
+- **Shared CLI helpers module** (`utils/cli_helpers.py`)
+  - `init_cache_from_args()`: Consistent cache initialization for both fetch and composite
+  - `output_exists()`: Check local and S3 existence to avoid redundant processing/uploads
+
+### Changed
+- **Fetch command default behavior**: Now fetches 6 recent timestamps instead of just 1
+  - Handles irregular provider uploads (data may be missing from latest)
+  - Uses same `--reprocess-count` default (6 = 30 minutes) as composite command
+
+- **Composite command refactored**: Uses shared CLI helpers for cache initialization and S3 checks
+
 ## [2.3.0] - 2026-01-28
 
 ### Added
@@ -54,7 +169,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Combined extent generation now includes Polish radar coverage
 
 ### Changed
+- **Logging standardization**: Replaced 92+ print statements with structured logging across 26 files
+  - 355 total logger statements (159 info, 68 debug, 56 warning, 66 error)
+  - Standardized operation terminology: Finding, Checking, Downloading, Processing, Saving
+  - Consistent source identification via `extra={"source": ...}`
+  - New modules: `core/logging.py`, `core/alerts.py`, `core/retry.py`
 - **Extent command output location**: Combined extent file now saves to `composite/extent_index.json` instead of `/tmp/` for better organization
+
+## [2.2.0] - 2026-01-27
+
+### Added
+- **IMGW (Poland) radar data source**: 6th supported radar source
+  - Data from danepubliczne.imgw.pl public API (no authentication required)
+  - ODIM_H5 format with CMAX product (Column Maximum reflectivity)
+  - 5-minute update intervals
+  - Poland coverage: 13.0°-26.4°E, 48.1°-56.2°N
+  - HEAD request availability checking (API listing lags behind file availability)
+- CLI support: `imeteo-radar fetch --source imgw`
+- Added IMGW to default composite sources
+- Poland output directory: `/tmp/poland/`
+- 54 unit tests covering all IMGW functionality
+
+### Changed
+- Registered IMGW in `SOURCE_REGISTRY` with 'poland' country/folder
+- Updated extent and coverage-mask commands to include IMGW
 
 ## [2.1.1] - 2026-01-22
 

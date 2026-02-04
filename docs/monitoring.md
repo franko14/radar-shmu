@@ -97,7 +97,7 @@ docker logs -f dwd-fetcher
 docker logs --tail 100 dwd-fetcher
 
 # Execute command in container
-docker exec dwd-fetcher ls /tmp/germany/
+docker exec dwd-fetcher ls /tmp/iradar/germany/
 ```
 
 ### Kubernetes
@@ -120,16 +120,16 @@ kubectl describe cronjob radar-dwd-fetcher
 
 ```bash
 # Check recent files
-ls -la /tmp/germany/ | tail -10
+ls -la /tmp/iradar/germany/ | tail -10
 
 # Count files from last hour
-find /tmp/germany/ -mmin -60 -name "*.png" | wc -l
+find /tmp/iradar/germany/ -mmin -60 -name "*.png" | wc -l
 
 # Verify extent file
-cat /tmp/germany/extent_index.json | jq .
+cat /tmp/iradar-data/extent/dwd/extent_index.json | jq .
 
 # Check file sizes
-du -sh /tmp/germany/
+du -sh /tmp/iradar/germany/
 ```
 
 ---

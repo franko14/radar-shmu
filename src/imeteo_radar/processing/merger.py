@@ -51,7 +51,9 @@ class RadarMerger:
             logger.warning("Need at least 2 sources to merge")
             return None
 
-        logger.info(f"Merging {len(timestamp_data)} sources using '{strategy}' strategy")
+        logger.info(
+            f"Merging {len(timestamp_data)} sources using '{strategy}' strategy"
+        )
 
         try:
             # Determine target grid and extent
@@ -65,7 +67,9 @@ class RadarMerger:
             # Regrid all sources to target grid
             regridded_data = {}
             for source_name, files in timestamp_data.items():
-                logger.info(f"Regridding {source_name} data...", extra={"source": source_name})
+                logger.info(
+                    f"Regridding {source_name} data...", extra={"source": source_name}
+                )
 
                 # For now, use first file from each source (TODO: handle multiple products)
                 file_data = files[0] if files else None
@@ -195,8 +199,8 @@ class RadarMerger:
             source_data = file_data["data"]
             source_coords = file_data["coordinates"]
 
-            # Use fast cv2.remap interpolation
-            return self._regrid_data_fast(
+            # Use cv2.remap interpolation
+            return self._regrid_data(
                 source_data, source_coords, target_extent, target_shape
             )
 
@@ -204,141 +208,132 @@ class RadarMerger:
             logger.error(f"Regridding failed: {e}")
             return None
 
-    def _regrid_data_fast(
+    def _regrid_data(
         self,
         source_data: np.ndarray,
         source_coords: dict[str, np.ndarray],
         target_extent: dict[str, np.ndarray],
         target_shape: tuple[int, int],
     ) -> np.ndarray | None:
-        """Fast regridding using OpenCV remap (8-15x faster than scipy)"""
-        try:
-            logger.info(f"Fast regridding: {source_data.shape} → {target_shape}")
+        """Regrid source data to target grid using OpenCV remap."""
+        logger.info(f"Regridding: {source_data.shape} → {target_shape}")
 
-            # Handle invalid data
-            valid_mask = np.isfinite(source_data)
-            if not np.any(valid_mask):
-                logger.warning("No valid data to regrid")
-                return None
+        # Handle invalid data
+        valid_mask = np.isfinite(source_data)
+        if not np.any(valid_mask):
+            logger.warning("No valid data to regrid")
+            return None
 
-            # Get coordinate arrays
-            source_lats = source_coords["lats"]
-            source_lons = source_coords["lons"]
-            target_lats = target_extent["lats"]
-            target_lons = target_extent["lons"]
+        # Get coordinate arrays
+        source_lats = source_coords["lats"]
+        source_lons = source_coords["lons"]
+        target_lats = target_extent["lats"]
+        target_lons = target_extent["lons"]
 
-            # Ensure data is in correct orientation (ascending coordinates) only for 1D
-            # Note: 2D coordinate arrays (DWD) skip orientation check - projection handles it
-            if source_lats.ndim == 1:
-                if source_lats[0] > source_lats[-1]:
-                    source_lats = source_lats[::-1]
-                    source_data = source_data[::-1, :]
+        # Ensure data is in correct orientation (ascending coordinates) only for 1D
+        # Note: 2D coordinate arrays (DWD) skip orientation check - projection handles it
+        if source_lats.ndim == 1:
+            if source_lats[0] > source_lats[-1]:
+                source_lats = source_lats[::-1]
+                source_data = source_data[::-1, :]
 
-                if source_lons[0] > source_lons[-1]:
-                    source_lons = source_lons[::-1]
-                    source_data = source_data[:, ::-1]
+            if source_lons[0] > source_lons[-1]:
+                source_lons = source_lons[::-1]
+                source_data = source_data[:, ::-1]
 
-            # Create coordinate mapping for cv2.remap
-            if source_lats.ndim == 2:
-                # For 2D coordinates, use scipy's nearest neighbor search
-                # This is slower but necessary for proper projection handling
-                from scipy.spatial import cKDTree
+        # Create coordinate mapping for cv2.remap
+        if source_lats.ndim == 2:
+            # For 2D coordinates, use scipy's nearest neighbor search
+            # This is slower but necessary for proper projection handling
+            from scipy.spatial import cKDTree
 
-                # Create source coordinate pairs
-                source_points = np.column_stack(
-                    [source_lons.flatten(), source_lats.flatten()]
-                )
-
-                # Create target coordinate pairs
-                target_lons_2d, target_lats_2d = np.meshgrid(target_lons, target_lats)
-                target_points = np.column_stack(
-                    [target_lons_2d.flatten(), target_lats_2d.flatten()]
-                )
-
-                # Build KD-tree for fast nearest neighbor search
-                tree = cKDTree(source_points)
-
-                # Find nearest neighbors
-                distances, indices = tree.query(target_points, k=1)
-
-                # Convert flat indices to 2D indices
-                source_shape = source_lats.shape
-                source_y_idx = indices // source_shape[1]
-                source_x_idx = indices % source_shape[1]
-
-                # Create mapping arrays
-                map_y = source_y_idx.reshape(target_shape).astype(np.float32)
-                map_x = source_x_idx.reshape(target_shape).astype(np.float32)
-
-            else:
-                # For 1D coordinates, use the original linear interpolation
-                # target_shape is (height, width) = (lat_count, lon_count)
-                map_y, map_x = np.meshgrid(
-                    np.interp(target_lats, source_lats, np.arange(len(source_lats))),
-                    np.interp(target_lons, source_lons, np.arange(len(source_lons))),
-                    indexing="ij",
-                )
-
-            # Convert to float32 for cv2
-            source_data_f32 = source_data.astype(np.float32)
-            map_x_f32 = map_x.astype(np.float32) if map_x.dtype != np.float32 else map_x
-            map_y_f32 = map_y.astype(np.float32) if map_y.dtype != np.float32 else map_y
-
-            # Create validity mask before remapping
-            valid_mask = np.isfinite(source_data_f32)
-
-            # Use large negative value instead of NaN for border (cv2 doesn't handle NaN properly)
-            INVALID_VALUE = -9999.0
-
-            # Use cv2.remap for fast interpolation
-            interpolated = cv2.remap(
-                source_data_f32,
-                map_x_f32,
-                map_y_f32,
-                interpolation=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=INVALID_VALUE,
+            # Create source coordinate pairs
+            source_points = np.column_stack(
+                [source_lons.flatten(), source_lats.flatten()]
             )
 
-            # Also remap the validity mask to track which pixels should be valid
-            valid_mask_f32 = valid_mask.astype(np.float32)
-            interpolated_mask = cv2.remap(
-                valid_mask_f32,
-                map_x_f32,
-                map_y_f32,
-                interpolation=cv2.INTER_NEAREST,  # Use nearest neighbor for mask
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0.0,
+            # Create target coordinate pairs
+            target_lons_2d, target_lats_2d = np.meshgrid(target_lons, target_lats)
+            target_points = np.column_stack(
+                [target_lons_2d.flatten(), target_lats_2d.flatten()]
             )
 
-            # Apply proper masking - set pixels to NaN where:
-            # 1. They were remapped from invalid source pixels
-            # 2. They got the border fill value
-            # 3. The interpolated mask indicates invalidity
-            final_mask = (
-                (interpolated_mask < 0.5)
-                | (interpolated <= INVALID_VALUE)
-                | (interpolated >= 1000)
+            # Build KD-tree for fast nearest neighbor search
+            tree = cKDTree(source_points)
+
+            # Find nearest neighbors
+            distances, indices = tree.query(target_points, k=1)
+
+            # Convert flat indices to 2D indices
+            source_shape = source_lats.shape
+            source_y_idx = indices // source_shape[1]
+            source_x_idx = indices % source_shape[1]
+
+            # Create mapping arrays
+            map_y = source_y_idx.reshape(target_shape).astype(np.float32)
+            map_x = source_x_idx.reshape(target_shape).astype(np.float32)
+
+        else:
+            # For 1D coordinates, use the original linear interpolation
+            # target_shape is (height, width) = (lat_count, lon_count)
+            map_y, map_x = np.meshgrid(
+                np.interp(target_lats, source_lats, np.arange(len(source_lats))),
+                np.interp(target_lons, source_lons, np.arange(len(source_lons))),
+                indexing="ij",
             )
-            interpolated[final_mask] = np.nan
 
-            # Additional quality control - clip to valid meteorological range
-            interpolated = np.clip(interpolated, -35, 85)
+        # Convert to float32 for cv2
+        source_data_f32 = source_data.astype(np.float32)
+        map_x_f32 = map_x.astype(np.float32) if map_x.dtype != np.float32 else map_x
+        map_y_f32 = map_y.astype(np.float32) if map_y.dtype != np.float32 else map_y
 
-            logger.info(
-                f"Fast regridded to shape {target_shape}, "
-                f"valid pixels: {np.sum(np.isfinite(interpolated))}"
-            )
+        # Create validity mask before remapping
+        valid_mask = np.isfinite(source_data_f32)
 
-            return interpolated.astype(np.float64)  # Convert back to expected dtype
+        # Use large negative value instead of NaN for border (cv2 doesn't handle NaN properly)
+        INVALID_VALUE = -9999.0
 
-        except Exception as e:
-            logger.error(f"Fast regridding failed: {e}")
-            # Fallback to scipy method
-            logger.info("Falling back to scipy interpolation...")
-            return self._regrid_data(
-                source_data, source_coords, target_extent, target_shape
-            )
+        # Use cv2.remap for fast interpolation
+        interpolated = cv2.remap(
+            source_data_f32,
+            map_x_f32,
+            map_y_f32,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=INVALID_VALUE,
+        )
+
+        # Also remap the validity mask to track which pixels should be valid
+        valid_mask_f32 = valid_mask.astype(np.float32)
+        interpolated_mask = cv2.remap(
+            valid_mask_f32,
+            map_x_f32,
+            map_y_f32,
+            interpolation=cv2.INTER_NEAREST,  # Use nearest neighbor for mask
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
+
+        # Apply proper masking - set pixels to NaN where:
+        # 1. They were remapped from invalid source pixels
+        # 2. They got the border fill value
+        # 3. The interpolated mask indicates invalidity
+        final_mask = (
+            (interpolated_mask < 0.5)
+            | (interpolated <= INVALID_VALUE)
+            | (interpolated >= 1000)
+        )
+        interpolated[final_mask] = np.nan
+
+        # Additional quality control - clip to valid meteorological range
+        interpolated = np.clip(interpolated, -35, 85)
+
+        logger.info(
+            f"Regridded to shape {target_shape}, "
+            f"valid pixels: {np.sum(np.isfinite(interpolated))}"
+        )
+
+        return interpolated.astype(np.float64)  # Convert back to expected dtype
 
     def _average_merge(self, regridded_data: dict[str, np.ndarray]) -> np.ndarray:
         """Improved average merge strategy with quality control and range clipping"""
@@ -526,65 +521,3 @@ class RadarMerger:
         logger.info(f"Maximum merge: {valid_pixels} valid pixels")
 
         return merged
-
-    def _regrid_data(
-        self,
-        source_data: np.ndarray,
-        source_coords: dict[str, np.ndarray],
-        target_extent: dict[str, np.ndarray],
-        target_shape: tuple[int, int],
-    ) -> np.ndarray | None:
-        """Fallback regridding using basic interpolation"""
-        try:
-            from scipy.interpolate import RegularGridInterpolator
-
-            logger.info(
-                f"Using scipy interpolation fallback: {source_data.shape} → {target_shape}"
-            )
-
-            # Get coordinate arrays
-            source_lats = source_coords["lats"]
-            source_lons = source_coords["lons"]
-            target_lats = target_extent["lats"]
-            target_lons = target_extent["lons"]
-
-            # Ensure data is in correct orientation
-            if source_lats[0] > source_lats[-1]:
-                source_lats = source_lats[::-1]
-                source_data = source_data[::-1, :]
-
-            if source_lons[0] > source_lons[-1]:
-                source_lons = source_lons[::-1]
-                source_data = source_data[:, ::-1]
-
-            # Create interpolator
-            interpolator = RegularGridInterpolator(
-                (source_lats, source_lons),
-                source_data,
-                method="linear",
-                bounds_error=False,
-                fill_value=np.nan,
-            )
-
-            # Create target grid
-            target_lat_grid, target_lon_grid = np.meshgrid(
-                target_lats, target_lons, indexing="ij"
-            )
-            target_points = np.stack(
-                [target_lat_grid.ravel(), target_lon_grid.ravel()], axis=-1
-            )
-
-            # Interpolate
-            interpolated = interpolator(target_points).reshape(target_shape)
-
-            logger.info(
-                f"Scipy interpolation complete, valid pixels: {np.sum(np.isfinite(interpolated))}"
-            )
-            return interpolated
-
-        except ImportError:
-            logger.error("Scipy not available for fallback interpolation")
-            return None
-        except Exception as e:
-            logger.error(f"Scipy interpolation failed: {e}")
-            return None

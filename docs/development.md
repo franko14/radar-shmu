@@ -37,7 +37,7 @@ pip install -e ".[dev]"
 ```
 
 This installs:
-- Core dependencies (numpy, h5py, matplotlib, requests, PIL, opencv-python)
+- Core dependencies (numpy, h5py, rasterio, matplotlib, requests, PIL, opencv-python, pyproj, netCDF4)
 - Development tools (pytest, black, isort, mypy, flake8)
 
 ### 4. Verify Installation
@@ -61,20 +61,33 @@ graph TB
                 DWD["dwd.py"]
                 SHMU["shmu.py"]
                 CHMI["chmi.py"]
+                OMSZ["omsz.py"]
+                ARSO["arso.py"]
+                IMGW["imgw.py"]
             end
 
             subgraph processing["processing/"]
-                EXP["exporter.py - PNG export"]
+                EXP["exporter.py - PNG export + reproject"]
                 COMP["compositor.py - Multi-source merge"]
+                REPR["reprojector.py - Unified reprojection"]
+                TCACHE["transform_cache.py - Three-tier cache"]
+                CMASK["coverage_mask.py - Coverage masks"]
             end
 
             subgraph core["core/"]
                 BASE["base.py - Coord conversion"]
                 PROJ["projection.py - Projections"]
+                PROJS["projections.py - CRS constants"]
             end
 
             subgraph config["config/"]
                 CMAP["shmu_colormap.py"]
+            end
+
+            subgraph utils["utils/"]
+                TS["timestamps.py - Timestamp handling"]
+                CACHE["processed_cache.py - Cache management"]
+                CLIH["cli_helpers.py - Shared CLI helpers"]
             end
         end
 

@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imeteo-radar"
-version = "2.3.0"
-description = "Weather radar data processor for DWD, SHMU, CHMI, ARSO, and OMSZ weather radar data"
+version = "2.5.1"
+description = "Weather radar data processor for DWD, SHMU, CHMI, OMSZ, ARSO, and IMGW weather radar data"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
 authors = [
     {name = "Radar Processing Team", email = "radar@example.com"}
 ]
-keywords = ["weather", "radar", "meteorology", "shmu", "dwd", "data-processing"]
+keywords = ["weather", "radar", "meteorology", "shmu", "dwd", "chmi", "omsz", "arso", "imgw", "data-processing"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -37,6 +37,7 @@ dependencies = [
     "boto3>=1.26.0",
     "scipy>=1.7.0",
     "pyproj>=3.0.0",
+    "rasterio>=1.3.0",
     "netCDF4>=1.6.0",
 ]
 

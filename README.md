@@ -1,12 +1,15 @@
 # iMeteo Radar
 
-Multi-source weather radar data processor for Central Europe. Downloads, processes, and exports high-quality radar images from DWD (Germany), SHMU (Slovakia), CHMI (Czech Republic), OMSZ (Hungary), and ARSO (Slovenia).
+Multi-source weather radar data processor for Central Europe. Downloads, processes, and exports high-quality radar images from DWD (Germany), SHMU (Slovakia), CHMI (Czech Republic), OMSZ (Hungary), ARSO (Slovenia), and IMGW (Poland).
 
 ## Features
 
-- **Five radar sources**: DWD, SHMU, CHMI, OMSZ, ARSO with 5-minute updates
+- **Six radar sources**: DWD, SHMU, CHMI, OMSZ, ARSO, IMGW with 5-minute updates
 - **Composite generation**: Merge multiple sources using maximum reflectivity
+- **Accurate reprojection**: rasterio-based reprojection with three-tier transform cache (10-50x speedup)
+- **Coverage masks**: Static coverage mask generation for each source and composite
 - **PNG export**: Transparent backgrounds, official SHMU colorscale (-35 to 85 dBZ)
+- **Cache-aware fetching**: Skip redundant downloads with dual-layer processed data cache
 - **Docker ready**: Pre-built image on DockerHub
 - **Cloud storage**: Optional upload to S3-compatible storage
 
@@ -19,14 +22,15 @@ Multi-source weather radar data processor for Central Europe. Downloads, process
 pip install -e ".[dev]"
 
 # Fetch latest radar data from individual sources
-imeteo-radar fetch --source dwd
-imeteo-radar fetch --source shmu
-imeteo-radar fetch --source chmi
-imeteo-radar fetch --source omsz
-imeteo-radar fetch --source arso
+imeteo-radar fetch --source dwd --output ./outputs/germany
+imeteo-radar fetch --source shmu --output ./outputs/slovakia
+imeteo-radar fetch --source chmi --output ./outputs/czechia
+imeteo-radar fetch --source omsz --output ./outputs/hungary
+imeteo-radar fetch --source arso --output ./outputs/slovenia
+imeteo-radar fetch --source imgw --output ./outputs/poland
 
-# Generate composite from all sources (default: dwd,shmu,chmi,omsz,arso)
-imeteo-radar composite
+# Generate composite from all sources (default: dwd,shmu,chmi,omsz,arso,imgw)
+imeteo-radar composite --output ./outputs/composite
 
 # Generate composite with memory optimization (no individual PNGs)
 imeteo-radar composite --no-individual
@@ -55,10 +59,10 @@ imeteo-radar fetch --source shmu --backload \
 imeteo-radar fetch --source dwd --output /data/radar/
 
 # Composite with specific sources
-imeteo-radar composite --sources dwd,shmu,chmi
+imeteo-radar composite --sources dwd,shmu,chmi --output ./outputs/composite
 
-# Composite with all 5 sources
-imeteo-radar composite --sources dwd,shmu,chmi,omsz,arso
+# Composite with all 6 sources
+imeteo-radar composite --sources dwd,shmu,chmi,omsz,arso,imgw
 
 # Composite with custom resolution (default: 500m)
 imeteo-radar composite --resolution 250
@@ -80,13 +84,15 @@ imeteo-radar coverage-mask --output /tmp/coverage/
 
 - **PNG files**: `{unix_timestamp}.png` with transparency
 - **Extent file**: `extent_index.json` for web mapping
-- **Directories**:
-  - `/tmp/germany/` (DWD)
-  - `/tmp/slovakia/` (SHMU)
-  - `/tmp/czechia/` (CHMI)
-  - `/tmp/hungary/` (OMSZ)
-  - `/tmp/slovenia/` (ARSO)
-  - `/tmp/composite/` (merged)
+- **Coverage mask**: `coverage_mask.png` for each source and composite
+- **Directories** (configurable via `--output`):
+  - `outputs/germany/` (DWD)
+  - `outputs/slovakia/` (SHMU)
+  - `outputs/czechia/` (CHMI)
+  - `outputs/hungary/` (OMSZ)
+  - `outputs/slovenia/` (ARSO)
+  - `outputs/poland/` (IMGW)
+  - `outputs/composite/` (merged)
 
 ## Data Sources
 
@@ -96,13 +102,15 @@ imeteo-radar coverage-mask --output /tmp/coverage/
 | SHMU | zmax | Slovakia | ~400 m |
 | CHMI | maxz | Czech Republic | ~500 m |
 | OMSZ | cmax | Hungary | ~500 m |
-| ARSO | zm | Slovenia | ~500 m |
+| ARSO | zm | Slovenia | ~1 km |
+| IMGW | cmax | Poland | ~500 m |
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [CLI Reference](docs/cli-reference.md) | Complete command documentation |
+| [Data Flow](docs/data-flow.md) | Sequence diagrams and cache flows |
 | [Deployment](docs/deployment.md) | Docker, Kubernetes, cloud storage |
 | [Architecture](docs/architecture.md) | Technical deep-dive |
 | [Development](docs/development.md) | Setup and contributing |
@@ -111,7 +119,7 @@ imeteo-radar coverage-mask --output /tmp/coverage/
 ## Requirements
 
 - Python 3.9+ (or Docker)
-- Dependencies: numpy, scipy, h5py, pyproj, matplotlib, requests, PIL, opencv-python
+- Dependencies: numpy, scipy, h5py, pyproj, rasterio, matplotlib, requests, PIL, opencv-python, netCDF4
 
 ## License
 

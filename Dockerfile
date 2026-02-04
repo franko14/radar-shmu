@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     build-essential \
     libhdf5-dev \
+    libgdal-dev \
+    libnetcdf-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -27,9 +29,11 @@ RUN pip install .
 # Stage 2: Runtime stage
 FROM python:3.11-slim
 
-# Install runtime dependencies
+# Install runtime dependencies (Debian Trixie/13 package names)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libhdf5-serial-dev \
+    libgdal36 \
+    libnetcdf22 \
     libgomp1 \
     libglib2.0-0 \
     libgl1 \
@@ -53,12 +57,15 @@ COPY --from=builder /app/pyproject.toml ./pyproject.toml
 COPY scripts/ ./scripts/
 
 # Create output directories with proper permissions
-RUN mkdir -p /tmp/germany /tmp/slovakia /tmp/czechia /tmp/composite /app/outputs /home/radar/.config/matplotlib \
-    && chown -R radar:radar /tmp/germany /tmp/slovakia /tmp/czechia /tmp/composite /app/outputs /home/radar
+RUN mkdir -p /tmp/iradar/germany /tmp/iradar/slovakia /tmp/iradar/czechia /tmp/iradar/hungary \
+    /tmp/iradar/slovenia /tmp/iradar/poland /tmp/iradar/composite \
+    /tmp/iradar-data/data /tmp/iradar-data/grid /tmp/iradar-data/extent /tmp/iradar-data/mask \
+    /app/outputs /home/radar/.config/matplotlib \
+    && chown -R radar:radar /tmp/iradar /tmp/iradar-data /app/outputs /home/radar
 
 # Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:${PYTHONPATH}"
+ENV PYTHONPATH="/app/src"
 ENV PYTHONUNBUFFERED=1
 ENV MPLCONFIGDIR="/home/radar/.config/matplotlib"
 
@@ -66,7 +73,7 @@ ENV MPLCONFIGDIR="/home/radar/.config/matplotlib"
 USER radar
 
 # Set up volume for outputs
-VOLUME ["/app/outputs", "/tmp/germany", "/tmp/slovakia", "/tmp/czechia", "/tmp/composite"]
+VOLUME ["/app/outputs", "/tmp/iradar", "/tmp/iradar-data"]
 
 # Default command - show help
 CMD ["imeteo-radar", "--help"]

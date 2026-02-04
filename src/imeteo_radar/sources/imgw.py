@@ -30,7 +30,6 @@ from ..utils.hdf5_utils import (
 from ..utils.parallel_download import (
     create_download_result,
     create_error_result,
-    execute_parallel_downloads,
 )
 from ..utils.timestamps import (
     TimestampFormat,
@@ -140,7 +139,6 @@ class IMGWRadarSource(RadarSource):
             pass
         return None
 
-
     def _check_timestamp_availability(self, timestamp: str, product: str) -> bool:
         """Check if data is available for a specific timestamp and product
 
@@ -167,7 +165,6 @@ class IMGWRadarSource(RadarSource):
         product_config = self.product_mapping[product]
         hvd_folder = product_config["hvd_folder"]
         return f"{self.download_base_url}/{hvd_folder}/{timestamp}00dBZ.cmax.h5"
-
 
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
@@ -345,8 +342,15 @@ class IMGWRadarSource(RadarSource):
 
                 # Get and decode attributes - IMGW stores scaling in dataset1/what (NOT data1/what)
                 what_attrs = decode_hdf5_attrs(dict(f["dataset1/what"].attrs))
-                what_global = decode_hdf5_attrs(dict(f["what"].attrs))  # Global metadata
+                what_global = decode_hdf5_attrs(
+                    dict(f["what"].attrs)
+                )  # Global metadata
                 where_attrs = decode_hdf5_attrs(dict(f["where"].attrs))
+
+                # Extract projection definition from HDF5 (IMGW may use native projection)
+                projdef = where_attrs.get("projdef", "")
+                if isinstance(projdef, bytes):
+                    projdef = projdef.decode()
 
                 # Get scaling parameters
                 scaling = get_scaling_params(
@@ -383,19 +387,39 @@ class IMGWRadarSource(RadarSource):
                     ll_lon, ll_lat = 13.0, 48.1
                     ur_lon, ur_lat = 26.4, 56.2
 
-                lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
+                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
+                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
 
                 # Extract metadata
                 product = what_attrs.get("product", "MAX")
                 quantity = what_attrs.get("quantity", "DBZH")
                 start_date = what_attrs.get("startdate", what_global.get("date", ""))
-                start_time_str = what_attrs.get("starttime", what_global.get("time", ""))
+                start_time_str = what_attrs.get(
+                    "starttime", what_global.get("time", "")
+                )
                 timestamp = str(start_date) + str(start_time_str)
+
+                # Build projection info for reprojector
+                # IMGW uses ODIM_H5 format - check for native projection (projdef)
+                # If projdef exists, data is in that projection with WGS84 corner coords
+                if projdef and projdef.strip():
+                    # Native projection (similar to SHMU mercator handling)
+                    projection_info = {
+                        "type": "mercator",
+                        "proj_def": projdef,
+                        "where_attrs": where_attrs,
+                    }
+                else:
+                    # Pure WGS84 lat/lon grid
+                    projection_info = {
+                        "type": "wgs84",
+                        "where_attrs": where_attrs,
+                    }
 
                 return {
                     "data": scaled_data,
-                    "coordinates": {"lons": lons, "lats": lats},
+                    "coordinates": None,  # Use projection instead
+                    "projection": projection_info,
                     "metadata": {
                         "product": product,
                         "quantity": quantity,
@@ -421,14 +445,19 @@ class IMGWRadarSource(RadarSource):
                 }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process IMGW file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process IMGW file {file_path}: {e}") from e
 
     def get_extent(self) -> dict[str, Any]:
         """Get IMGW radar coverage extent"""
 
-        # IMGW radar coverage (from actual HDF5 data)
-        # Covers Poland and surrounding areas
-        wgs84 = {"west": 13.0, "east": 26.4, "south": 48.1, "north": 56.2}
+        # IMGW radar coverage - actual bounds from reprojected GeoTIFF
+        # Azimuthal equidistant projection reprojected to Web Mercator
+        wgs84 = {
+            "west": 11.804019,
+            "east": 26.376516,
+            "south": 48.124377,
+            "north": 56.398335,
+        }
 
         # Convert to Web Mercator
         x_min, y_min = lonlat_to_mercator(wgs84["west"], wgs84["south"])

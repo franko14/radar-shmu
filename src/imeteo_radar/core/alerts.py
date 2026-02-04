@@ -7,9 +7,10 @@ the health of radar data sources.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 
 class AlertLevel(Enum):
@@ -35,7 +36,7 @@ class Alert:
     level: AlertLevel
     source: str
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class AlertManager:
@@ -58,8 +59,8 @@ class AlertManager:
     def __init__(self):
         """Initialize the AlertManager."""
         self.logger = logging.getLogger("imeteo_radar.alerts")
-        self.handlers: List[Callable[[Alert], None]] = []
-        self.failure_counts: Dict[str, int] = {}
+        self.handlers: list[Callable[[Alert], None]] = []
+        self.failure_counts: dict[str, int] = {}
         self.alert_threshold = 3  # consecutive failures before alert
 
     def record_failure(self, source: str, error: str):
@@ -134,7 +135,7 @@ class AlertManager:
         """
         return self.failure_counts.get(source, 0)
 
-    def get_all_failure_counts(self) -> Dict[str, int]:
+    def get_all_failure_counts(self) -> dict[str, int]:
         """Get failure counts for all tracked sources.
 
         Returns:
@@ -144,7 +145,7 @@ class AlertManager:
 
 
 # Global singleton instance
-_alert_manager: Optional[AlertManager] = None
+_alert_manager: AlertManager | None = None
 
 
 def get_alert_manager() -> AlertManager:

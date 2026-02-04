@@ -90,13 +90,17 @@ class RadarSource(ABC):
 
         # Use default product if not specified
         if products is None:
-            products = self.get_available_products()[:1] if hasattr(self, 'get_available_products') else []
+            products = (
+                self.get_available_products()[:1]
+                if hasattr(self, "get_available_products")
+                else []
+            )
 
         if not products:
             return []
 
         # Check if subclass has _download_single_file method
-        if hasattr(self, '_download_single_file'):
+        if hasattr(self, "_download_single_file"):
             from ..utils.parallel_download import execute_parallel_downloads
 
             logger.info(
@@ -352,4 +356,6 @@ def extract_hdf5_corner_extent(
                 "extent": {"wgs84": fallback_extent},
                 "dimensions": (0, 0),
             }
-        raise RuntimeError(f"Failed to extract HDF5 extent from {file_path}: {e}")
+        raise RuntimeError(
+            f"Failed to extract HDF5 extent from {file_path}: {e}"
+        ) from e

@@ -54,7 +54,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary, IMGW for Poland)",
     )
     fetch_parser.add_argument(
-        "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
+        "--output", type=Path, help="Output directory (default: /tmp/iradar/{country}/)"
     )
     fetch_parser.add_argument(
         "--backload", action="store_true", help="Enable backload of historical data"
@@ -83,6 +83,44 @@ def create_parser() -> argparse.ArgumentParser:
         help="Disable upload to DigitalOcean Spaces (for local development only)",
     )
 
+    # Reprocess count for non-backload mode
+    fetch_parser.add_argument(
+        "--reprocess-count",
+        type=int,
+        default=6,
+        help="Number of recent timestamps to fetch (default: 6 = 30 min). "
+        "Fetching multiple timestamps handles irregular provider uploads.",
+    )
+
+    # Cache arguments (same as composite for consistency)
+    fetch_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("/tmp/iradar-data/data"),
+        help="Directory for processed data cache (default: /tmp/iradar-data/data)",
+    )
+    fetch_parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=60,
+        help="Cache TTL in minutes (default: 60)",
+    )
+    fetch_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching entirely",
+    )
+    fetch_parser.add_argument(
+        "--no-cache-upload",
+        action="store_true",
+        help="Disable S3 cache sync (local cache only)",
+    )
+    fetch_parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear cache before running",
+    )
+
     # Extent command - generate extent information only
     extent_parser = subparsers.add_parser(
         "extent", help="Generate extent information JSON"
@@ -94,7 +132,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="Radar source(s) to generate extent for",
     )
     extent_parser.add_argument(
-        "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
+        "--output", type=Path, help="Output directory (default: /tmp/iradar/{country}/)"
     )
 
     # Composite command - merge multiple sources
@@ -110,8 +148,8 @@ def create_parser() -> argparse.ArgumentParser:
     composite_parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/tmp/composite"),
-        help="Output directory (default: /tmp/composite/)",
+        default=Path("/tmp/iradar/composite"),
+        help="Output directory (default: /tmp/iradar/composite/)",
     )
     composite_parser.add_argument(
         "--resolution",
@@ -188,8 +226,8 @@ def create_parser() -> argparse.ArgumentParser:
     composite_parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("/tmp/iradar-data"),
-        help="Directory for processed data cache (default: /tmp/iradar-data)",
+        default=Path("/tmp/iradar-data/data"),
+        help="Directory for processed data cache (default: /tmp/iradar-data/data)",
     )
     composite_parser.add_argument(
         "--cache-ttl",
@@ -245,6 +283,48 @@ def create_parser() -> argparse.ArgumentParser:
         help="Skip S3 operations (local only)",
     )
 
+    # Transform cache command - manage precomputed transformation grids
+    transform_cache_parser = subparsers.add_parser(
+        "transform-cache",
+        help="Manage precomputed transformation grids for fast reprojection",
+    )
+    transform_cache_parser.add_argument(
+        "--precompute",
+        action="store_true",
+        help="Precompute transform grids for sources",
+    )
+    transform_cache_parser.add_argument(
+        "--download-s3",
+        action="store_true",
+        help="Download transform grids from S3 to local cache",
+    )
+    transform_cache_parser.add_argument(
+        "--clear-local",
+        action="store_true",
+        help="Clear local transform cache",
+    )
+    transform_cache_parser.add_argument(
+        "--clear-s3",
+        action="store_true",
+        help="Clear S3 transform cache",
+    )
+    transform_cache_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show transform cache statistics",
+    )
+    transform_cache_parser.add_argument(
+        "--upload-s3",
+        action="store_true",
+        help="Upload precomputed grids to S3 (use with --precompute)",
+    )
+    transform_cache_parser.add_argument(
+        "--source",
+        choices=["dwd", "shmu", "chmi", "arso", "omsz", "imgw", "all"],
+        default="all",
+        help="Source to operate on (default: all)",
+    )
+
     # Coverage mask command - generate static coverage masks
     coverage_parser = subparsers.add_parser(
         "coverage-mask", help="Generate static coverage mask PNG files"
@@ -263,8 +343,8 @@ def create_parser() -> argparse.ArgumentParser:
     coverage_parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/tmp"),
-        help="Base output directory (default: /tmp/) - masks saved alongside radar data",
+        default=Path("/tmp/iradar"),
+        help="Base output directory (default: /tmp/iradar/) - masks saved alongside radar data",
     )
     coverage_parser.add_argument(
         "--resolution",
@@ -348,26 +428,47 @@ def generate_extent_info(source, source_name: str, country_dir: str) -> dict:
     return extent_info
 
 
-def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
-    """Save extent information to JSON file"""
+def save_extent_index(
+    source_name: str,
+    extent_info: dict,
+    force: bool = False,
+    extent_base_dir: Path | None = None,
+    uploader=None,
+):
+    """Save extent information to JSON file at iradar-data/extent/{source}/
+
+    Canonical format:
+    {
+      "metadata": { "title": "...", "source": "dwd", "generated": "..." },
+      "wgs84": { "west": ..., "east": ..., "south": ..., "north": ... }
+    }
+
+    Args:
+        source_name: Source identifier (e.g., 'dwd', 'composite')
+        extent_info: Extent info dict with 'extent' and 'generated' keys
+        force: Overwrite existing file
+        extent_base_dir: Base dir for extent files (default: /tmp/iradar-data/extent)
+        uploader: Optional SpacesUploader for S3 upload
+    """
     import json
 
-    extent_file = output_dir / "extent_index.json"
+    base = extent_base_dir or Path("/tmp/iradar-data/extent")
+    extent_dir = base / source_name
+    extent_dir.mkdir(parents=True, exist_ok=True)
+    extent_file = extent_dir / "extent_index.json"
 
     # Check if file exists and skip if not forced
     if extent_file.exists() and not force:
         return False
 
-    # Create the full structure
+    # Build canonical extent_index.json
     extent_data = {
         "metadata": {
             "title": "Radar Coverage Extent",
-            "description": "Geographic extent and projection information for radar data",
-            "version": "1.0",
+            "source": extent_info.get("name", "").lower(),
             "generated": extent_info["generated"],
-            "coordinate_system": "WGS84 geographic coordinates (EPSG:4326)",
         },
-        "source": extent_info,
+        "wgs84": extent_info.get("extent", {}),
     }
 
     # Save to file
@@ -375,6 +476,12 @@ def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
         json.dump(extent_data, f, indent=2)
 
     logger.info(f"Saved extent information to: {extent_file}")
+
+    # Upload to S3 if uploader available
+    if uploader:
+        s3_key = f"iradar-data/extent/{source_name}/extent_index.json"
+        uploader.upload_metadata(extent_file, s3_key, content_type="application/json")
+
     return True
 
 
@@ -459,7 +566,7 @@ def fetch_command(args) -> int:
 
         # Set output directory based on source
         if not args.output:
-            output_dir = Path(f"/tmp/{country_dir}/")
+            output_dir = Path(f"/tmp/iradar/{country_dir}/")
         else:
             output_dir = args.output
 
@@ -469,7 +576,10 @@ def fetch_command(args) -> int:
         # Generate and save extent information on first run or if requested
         extent_info = generate_extent_info(source, args.source.upper(), country_dir)
         save_extent_index(
-            output_dir, extent_info, force=getattr(args, "update_extent", False)
+            args.source,
+            extent_info,
+            force=getattr(args, "update_extent", False),
+            uploader=uploader if upload_enabled else None,
         )
 
         logger.info(
@@ -527,25 +637,24 @@ def fetch_command(args) -> int:
                     filename = f"{unix_timestamp}.png"
                     output_path = output_dir / filename
 
-                    # Process to array
+                    # Process to array - this returns projection info needed for reprojection
                     radar_data = source.process_to_array(file_info["path"])
 
-                    # Prepare data for PNG export
-                    export_data = {
-                        "data": radar_data["data"],
-                        "timestamp": timestamp_str,
-                        "product": product,
-                        "source": args.source,
-                        "units": "dBZ",
-                    }
+                    # Use radar_data directly - it contains data, extent, and projection info
+                    # needed for proper reprojection to Web Mercator
+                    radar_data["timestamp"] = timestamp_str
+                    radar_data["metadata"] = radar_data.get("metadata", {})
+                    radar_data["metadata"]["source"] = args.source
+                    radar_data["metadata"]["units"] = "dBZ"
 
-                    # Export to PNG (using fast method to reduce memory usage)
+                    # Export to PNG with reprojection to Web Mercator
                     extent = source.get_extent()
-                    exporter.export_png_fast(
-                        radar_data=export_data,
+                    exporter.export_png(
+                        radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
                         colormap_type="reflectivity_shmu",  # Use SHMU colormap for consistency
+                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
                     )
 
                     logger.info(f"Saved: {output_path}")
@@ -580,55 +689,183 @@ def fetch_command(args) -> int:
             cleanup_old_files(output_dir, max_age_hours=6)
 
         else:
-            # Just fetch latest using LATEST endpoint
-            logger.info("Downloading latest timestamp...")
+            # Fetch multiple recent timestamps with cache awareness
+            # This handles irregular provider uploads by checking multiple timestamps
+            import gc
 
-            if args.source == "dwd":
-                files = source.download_latest(
-                    count=1, products=[product], use_latest=True
+            import matplotlib.pyplot as plt
+
+            from .utils.cli_helpers import init_cache_from_args, output_exists
+            from .utils.timestamps import is_timestamp_in_cache
+
+            reprocess_count = getattr(args, "reprocess_count", 6)
+            logger.info(f"Fetching up to {reprocess_count} recent timestamps...")
+
+            # Initialize cache using shared helper
+            cache = init_cache_from_args(args, upload_enabled)
+
+            # Get available timestamps from provider
+            # Request extra timestamps (+2) to account for potential gaps or filtering
+            available_timestamps = source.get_available_timestamps(
+                count=reprocess_count + 2,
+                products=[product],
+            )
+
+            if not available_timestamps:
+                logger.error("No data available from provider")
+                return 1
+
+            # Determine which timestamps need downloading (cache-aware)
+            timestamps_to_download = []
+            timestamps_from_cache = []
+
+            if cache:
+                cached_ts_set = set(
+                    cache.get_available_timestamps(args.source, product)
                 )
-            else:  # SHMU
-                files = source.download_latest(count=1, products=[product])
+                for ts in available_timestamps[:reprocess_count]:
+                    if is_timestamp_in_cache(ts, cached_ts_set):
+                        timestamps_from_cache.append(ts)
+                    else:
+                        timestamps_to_download.append(ts)
+                logger.info(
+                    f"{len(timestamps_from_cache)} in cache, "
+                    f"{len(timestamps_to_download)} to download"
+                )
+            else:
+                timestamps_to_download = available_timestamps[:reprocess_count]
 
-            if not files:
+            # Download non-cached timestamps
+            downloaded_files = []
+            if timestamps_to_download:
+                downloaded_files = source.download_timestamps(
+                    timestamps=timestamps_to_download,
+                    products=[product],
+                )
+
+            if not downloaded_files and not timestamps_from_cache:
                 logger.error("No data available")
                 return 1
 
-            file_info = files[0]
-
-            # Extract timestamp for filename
-            timestamp_str = file_info["timestamp"]
-            dt = parse_timestamp_to_datetime(timestamp_str, args.source)
-            unix_timestamp = int(dt.timestamp())
-            filename = f"{unix_timestamp}.png"
-            output_path = output_dir / filename
-
-            # Process to array
-            radar_data = source.process_to_array(file_info["path"])
-
-            # Prepare data for PNG export
-            export_data = {
-                "data": radar_data["data"],
-                "timestamp": timestamp_str,
-                "product": product,
-                "source": args.source,
-                "units": "dBZ",
-            }
-
-            # Export to PNG (using fast method to reduce memory usage)
+            # Process each file
+            processed_count = 0
+            skipped_count = 0
             extent = source.get_extent()
-            exporter.export_png_fast(
-                radar_data=export_data,
-                output_path=output_path,
-                extent=extent,
-                colormap_type="reflectivity_shmu",
+
+            # Process downloaded files
+            for file_info in downloaded_files:
+                try:
+                    timestamp_str = file_info["timestamp"]
+                    dt = parse_timestamp_to_datetime(timestamp_str, args.source)
+                    unix_timestamp = int(dt.timestamp())
+                    filename = f"{unix_timestamp}.png"
+                    output_path = output_dir / filename
+
+                    # Skip if output already exists (local or S3)
+                    if output_exists(
+                        output_path,
+                        args.source,
+                        filename,
+                        uploader if upload_enabled else None,
+                    ):
+                        skipped_count += 1
+                        continue
+
+                    # Process to array - this returns projection info needed for reprojection
+                    radar_data = source.process_to_array(file_info["path"])
+
+                    # Cache immediately after processing
+                    if cache:
+                        cache.put(args.source, timestamp_str, product, radar_data)
+
+                    # Use radar_data directly - it contains data, extent, and projection info
+                    radar_data["timestamp"] = timestamp_str
+                    radar_data["metadata"] = radar_data.get("metadata", {})
+                    radar_data["metadata"]["source"] = args.source
+                    radar_data["metadata"]["units"] = "dBZ"
+
+                    # Export to PNG with reprojection to Web Mercator
+                    exporter.export_png(
+                        radar_data=radar_data,
+                        output_path=output_path,
+                        extent=extent,
+                        colormap_type="reflectivity_shmu",
+                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
+                    )
+
+                    logger.info(f"Saved: {output_path}")
+                    processed_count += 1
+
+                    # Upload to DigitalOcean Spaces if enabled
+                    if upload_enabled and uploader:
+                        uploader.upload_file(output_path, args.source, filename)
+
+                    # Clean up memory
+                    plt.close("all")
+                    del radar_data
+                    gc.collect()
+
+                except Exception as e:
+                    logger.warning(f"Failed to process {file_info['timestamp']}: {e}")
+                    continue
+
+            # Process cached timestamps (check if output exists, skip if so)
+            for ts in timestamps_from_cache:
+                try:
+                    dt = parse_timestamp_to_datetime(ts, args.source)
+                    unix_timestamp = int(dt.timestamp())
+                    filename = f"{unix_timestamp}.png"
+                    output_path = output_dir / filename
+
+                    # Skip if output already exists
+                    if output_exists(
+                        output_path,
+                        args.source,
+                        filename,
+                        uploader if upload_enabled else None,
+                    ):
+                        skipped_count += 1
+                        continue
+
+                    # Get from cache and process
+                    radar_data = cache.get(args.source, ts, product)
+                    if radar_data is None:
+                        logger.debug(f"Cache miss for {ts}, skipping")
+                        continue
+
+                    # Use radar_data directly - it contains data, extent, and projection info
+                    radar_data["timestamp"] = ts
+                    radar_data["metadata"] = radar_data.get("metadata", {})
+                    radar_data["metadata"]["source"] = args.source
+                    radar_data["metadata"]["units"] = "dBZ"
+
+                    exporter.export_png(
+                        radar_data=radar_data,
+                        output_path=output_path,
+                        extent=extent,
+                        colormap_type="reflectivity_shmu",
+                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
+                    )
+
+                    logger.info(f"Saved (from cache): {output_path}")
+                    processed_count += 1
+
+                    if upload_enabled and uploader:
+                        uploader.upload_file(output_path, args.source, filename)
+
+                    # Clean up memory
+                    plt.close("all")
+                    del radar_data
+                    gc.collect()
+
+                except Exception as e:
+                    logger.warning(f"Failed to process cached {ts}: {e}")
+                    continue
+
+            # Summary
+            logger.info(
+                f"Processed {processed_count}, skipped {skipped_count} (already exist)"
             )
-
-            logger.info(f"Saved: {output_path}")
-
-            # Upload to DigitalOcean Spaces if enabled
-            if upload_enabled and uploader:
-                uploader.upload_file(output_path, args.source, filename)
 
         # Clean up temporary files
         source.cleanup_temp_files()
@@ -683,6 +920,8 @@ def main():
             return coverage_mask_command(args)
         elif args.command == "cache":
             return cache_command(args)
+        elif args.command == "transform-cache":
+            return transform_cache_command(args)
         else:
             logger.error(f"Unknown command: {args.command}")
             return 1
@@ -742,13 +981,7 @@ def extent_command(args) -> int:
             )
 
             # Save individual extent file
-            if args.output:
-                output_dir = args.output
-            else:
-                output_dir = Path(f"/tmp/{country_dir}")
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            save_extent_index(output_dir, extent_info, force=True)
+            save_extent_index(source_name, extent_info, force=True)
 
             # Add to combined structure
             combined_extent["sources"][source_name] = extent_info
@@ -795,13 +1028,14 @@ def coverage_mask_command(args) -> int:
             generate_source_coverage_mask,
         )
 
-        output_base = str(args.output)
+        png_base = str(args.output)
 
         if args.composite:
             # Generate only composite mask
             result = generate_composite_coverage_mask(
                 sources=get_all_source_names(),
-                output_dir=os.path.join(output_base, "composite"),
+                output_dir="/tmp/iradar-data/mask/composite",
+                output_base_dir=png_base,
                 resolution_m=args.resolution,
             )
             return 0 if result else 1
@@ -809,7 +1043,7 @@ def coverage_mask_command(args) -> int:
         elif args.source == "all":
             # Generate all masks (individual + composite)
             results = generate_all_coverage_masks(
-                output_base_dir=output_base, resolution_m=args.resolution
+                output_base_dir=png_base, resolution_m=args.resolution
             )
             return 0 if results else 1
 
@@ -821,8 +1055,11 @@ def coverage_mask_command(args) -> int:
                 return 1
 
             folder = config["folder"]
-            output_dir = os.path.join(output_base, folder)
-            result = generate_source_coverage_mask(args.source, output_dir)
+            mask_dir = f"/tmp/iradar-data/mask/{args.source}"
+            png_dir = os.path.join(png_base, folder)
+            result = generate_source_coverage_mask(
+                args.source, output_dir=mask_dir, png_dir=png_dir
+            )
             return 0 if result else 1
 
     except ImportError as e:
@@ -889,6 +1126,122 @@ def cache_command(args) -> int:
 
     except Exception as e:
         logger.error(f"Cache command error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+
+def transform_cache_command(args) -> int:
+    """Handle transform cache management command"""
+    try:
+        from .processing.transform_cache import TransformCache
+
+        cache = TransformCache()
+
+        # Determine which sources to process
+        if args.source == "all":
+            from .config.sources import get_all_source_names
+
+            sources = get_all_source_names()
+        else:
+            sources = [args.source]
+
+        if args.stats:
+            # Show cache statistics
+            stats = cache.get_stats()
+            logger.info("Transform Cache Statistics:")
+            logger.info(f"  Local directory: {stats['local_dir']}")
+            logger.info(f"  S3 enabled: {stats['s3_enabled']}")
+            logger.info(f"  S3 prefix: {stats['s3_prefix']}")
+            logger.info(
+                f"  Memory cache: {stats['memory_cache_entries']} entries, "
+                f"{stats['memory_cache_size_mb']} MB"
+            )
+            logger.info(
+                f"  Local cache: {stats['local_entries']} entries, "
+                f"{stats['local_size_mb']} MB"
+            )
+            logger.info(f"  S3 cache: {stats['s3_entries']} entries")
+
+            if stats["sources"]:
+                logger.info("  By source:")
+                for source, info in stats["sources"].items():
+                    tiers = []
+                    if info["memory"]:
+                        tiers.append("memory")
+                    if info["local"]:
+                        tiers.append("local")
+                    if info["s3"]:
+                        tiers.append("s3")
+                    logger.info(
+                        f"    {source.upper()}: {', '.join(tiers) if tiers else 'none'}"
+                    )
+            return 0
+
+        if args.clear_local:
+            # Clear local cache
+            removed = cache.clear_local()
+            logger.info(f"Cleared {removed} local transform cache entries")
+            return 0
+
+        if args.clear_s3:
+            # Clear S3 cache
+            removed = cache.clear_s3()
+            logger.info(f"Cleared {removed} S3 transform cache entries")
+            return 0
+
+        if args.download_s3:
+            # Download from S3 to local cache
+            downloaded = cache.download_from_s3()
+            logger.info(f"Downloaded {downloaded} transform cache entries from S3")
+            return 0
+
+        if args.precompute:
+            # Precompute transform grids for sources
+            upload_to_s3 = args.upload_s3
+            success_count = 0
+            skip_count = 0
+
+            for source_name in sources:
+                logger.info(f"Precomputing transform grid for {source_name.upper()}...")
+                try:
+                    grid = cache.precompute_for_source(
+                        source_name=source_name,
+                        upload_to_s3=upload_to_s3,
+                    )
+                    if grid:
+                        logger.info(
+                            f"  {source_name.upper()}: "
+                            f"{grid.src_shape[0]}x{grid.src_shape[1]} -> "
+                            f"{grid.dst_shape[0]}x{grid.dst_shape[1]}, "
+                            f"{grid.memory_size_mb():.1f} MB"
+                        )
+                        success_count += 1
+                    else:
+                        logger.info(
+                            f"  {source_name.upper()}: Skipped (WGS84 or no data)"
+                        )
+                        skip_count += 1
+                except Exception as e:
+                    logger.warning(f"  {source_name.upper()}: Failed - {e}")
+
+            logger.info(
+                f"Precompute complete: {success_count} computed, {skip_count} skipped"
+            )
+            return 0
+
+        # If no action specified, show help
+        logger.error(
+            "No action specified. Use --precompute, --download-s3, --clear-local, --clear-s3, or --stats"
+        )
+        return 1
+
+    except ImportError as e:
+        logger.error(f"Import error: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Transform cache command error: {e}")
         import traceback
 
         traceback.print_exc()

@@ -43,8 +43,8 @@ flowchart TB
     process --> COMPOSITE["COMPOSITE<br/>(composite command)"]
 
     subgraph merge["COMPOSITE PROCESSING"]
-        M1["Reproject to EPSG:3857"]
-        M2["Interpolate to target grid"]
+        M1["Reproject to EPSG:3857 (rasterio)"]
+        M2["Apply cached transform grids"]
         M3["Merge (max reflectivity)"]
     end
 
@@ -350,14 +350,35 @@ This ensures:
 
 ### Reprojection
 
-All sources are reprojected to Web Mercator (EPSG:3857):
+All sources are reprojected to Web Mercator (EPSG:3857) using `rasterio.warp.reproject`:
 
-1. Extract source coordinates (1D arrays or 2D meshgrids)
-2. Transform to Web Mercator using `pyproj`
-3. Create `RegularGridInterpolator` for each source
-4. Resample to target grid (nearest-neighbor)
+1. Build native CRS and affine transform from source projection info (ODIM_H5 metadata)
+2. Reproject using rasterio with nearest-neighbor resampling
+3. Optionally use precomputed transform grids from the three-tier cache (10-50x faster)
+4. Individual source PNGs are reprojected during export via the exporter module
 
-**Implementation**: `src/imeteo_radar/processing/compositor.py`
+Supported native projections:
+- **DWD**: Polar stereographic (custom DWD definition)
+- **SHMU/CHMI**: Web Mercator (EPSG:3857)
+- **IMGW**: Azimuthal equidistant (from HDF5 corners)
+- **OMSZ/ARSO**: Geographic WGS84 (lat/lon grid)
+
+**Implementation**: `src/imeteo_radar/processing/reprojector.py`, `src/imeteo_radar/processing/compositor.py`
+
+### Transform Cache
+
+Precomputed pixel-to-pixel index mappings stored in a three-tier cache for fast reprojection:
+
+| Tier | Location | Persistence | Use Case |
+|------|----------|-------------|----------|
+| Memory | In-process dict | Session only | Repeated operations in same run |
+| Local disk | `/tmp/iradar-data/grid/` | Container lifetime | Warm restarts |
+| S3/DO Spaces | Cloud storage | Permanent | Pod restarts, new deployments |
+
+- Uses int16 indices (~4 bytes/pixel) for memory efficiency
+- `fast_reproject()` applies precomputed grid via numpy array indexing
+
+**Implementation**: `src/imeteo_radar/processing/transform_cache.py`
 
 ### Target Grid
 
@@ -505,13 +526,17 @@ graph LR
         end
 
         subgraph processing/
-            EXP[exporter.py<br/>PNG export]
+            EXP[exporter.py<br/>PNG export + reproject]
             COMP[compositor.py<br/>Multi-source merge]
+            REPR[reprojector.py<br/>Unified reprojection]
+            TCACHE[transform_cache.py<br/>Three-tier cache]
+            CMASK[coverage_mask.py<br/>Coverage masks]
         end
 
         subgraph core/
             BASE2[base.py<br/>Coord conversion]
             PROJ[projection.py<br/>Projections]
+            PROJS[projections.py<br/>CRS constants]
         end
 
         subgraph config/
@@ -522,6 +547,7 @@ graph LR
             TS[timestamps.py<br/>Timestamp handling]
             CACHE[processed_cache.py<br/>Cache management]
             PARA[parallel_download.py<br/>Parallel downloads]
+            CLIH[cli_helpers.py<br/>Shared CLI helpers]
         end
     end
 

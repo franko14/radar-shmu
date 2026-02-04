@@ -12,8 +12,8 @@ Storage Layers:
 - Layer 2: S3/DO Spaces - persistent across pod restarts (production K8s)
 
 Storage Format:
-- Local: /tmp/iradar-data/{source}/{source}_{product}_{timestamp}.npz
-- S3: iradar-data/{source}/{source}_{product}_{timestamp}.npz
+- Local: /tmp/iradar-data/data/{source}/{source}_{product}_{timestamp}.npz
+- S3: iradar-data/data/{source}/{source}_{product}_{timestamp}.npz
 - NPZ file containing: data (2D float32), lons, lats arrays
 - JSON metadata file alongside with extent, dimensions, cached_at timestamp
 """
@@ -29,6 +29,27 @@ import numpy as np
 from ..core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _make_json_serializable(obj):
+    """Convert numpy types to native Python types for JSON serialization.
+
+    HDF5 attributes often contain numpy int64/float64 values that
+    json.dump cannot handle. This recursively converts them.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return {k: _make_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_serializable(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 
 class ProcessedDataCache:
@@ -61,11 +82,11 @@ class ProcessedDataCache:
         """Initialize the processed data cache.
 
         Args:
-            local_dir: Local cache directory (default: /tmp/radar_cache)
+            local_dir: Local cache directory (default: /tmp/iradar-data/data)
             ttl_minutes: Time-to-live for cache entries in minutes (default: 60)
             s3_enabled: Whether to use S3/DO Spaces as secondary layer
         """
-        self.local_dir = local_dir or Path("/tmp/iradar-data")
+        self.local_dir = local_dir or Path("/tmp/iradar-data/data")
         self.ttl_minutes = ttl_minutes
         self.s3_enabled = s3_enabled
         self._uploader = None
@@ -114,12 +135,12 @@ class ProcessedDataCache:
     def _get_s3_key(self, source: str, timestamp: str, product: str) -> str:
         """Get S3 key for cache file."""
         ts_normalized = timestamp[:12]
-        return f"iradar-data/{source}/{source}_{product}_{ts_normalized}.npz"
+        return f"iradar-data/data/{source}/{source}_{product}_{ts_normalized}.npz"
 
     def _get_s3_metadata_key(self, source: str, timestamp: str, product: str) -> str:
         """Get S3 key for metadata file."""
         ts_normalized = timestamp[:12]
-        return f"iradar-data/{source}/{source}_{product}_{ts_normalized}.json"
+        return f"iradar-data/data/{source}/{source}_{product}_{ts_normalized}.json"
 
     def _is_expired(self, metadata_path: Path) -> bool:
         """Check if a cache entry is expired based on its metadata."""
@@ -136,40 +157,6 @@ class ProcessedDataCache:
             return age_minutes > self.ttl_minutes
         except Exception:
             return True
-
-    def exists(self, source: str, timestamp: str, product: str) -> bool:
-        """Check if valid (non-expired) cache entry exists.
-
-        Checks local cache first, then S3 if enabled.
-
-        Args:
-            source: Source identifier (e.g., 'arso', 'shmu')
-            timestamp: Timestamp string (YYYYMMDDHHMM format)
-            product: Product identifier (e.g., 'zm', 'zmax')
-
-        Returns:
-            True if valid cache entry exists, False otherwise
-        """
-        local_path = self._get_local_path(source, timestamp, product)
-        metadata_path = self._get_metadata_path(local_path)
-
-        # Check local cache first
-        if local_path.exists() and metadata_path.exists():
-            if not self._is_expired(metadata_path):
-                return True
-
-        # Check S3 if local miss
-        if self._get_uploader():
-            npz_key = self._get_s3_key(source, timestamp, product)
-            try:
-                self._get_uploader().s3_client.head_object(
-                    Bucket=self._get_uploader().bucket, Key=npz_key
-                )
-                return True
-            except Exception:
-                pass
-
-        return False
 
     def get(self, source: str, timestamp: str, product: str) -> dict[str, Any] | None:
         """Get cached radar data for a source/timestamp/product.
@@ -230,6 +217,11 @@ class ProcessedDataCache:
             "timestamp": metadata.get("timestamp", ""),
             "dimensions": tuple(metadata.get("dimensions", list(data.shape))),
         }
+
+        # Restore projection info (required for accurate reprojection)
+        projection = metadata.get("projection")
+        if projection is not None:
+            radar_data["projection"] = projection
 
         # Reconstruct coordinates dict (required by compositor)
         if lons is not None and lats is not None:
@@ -303,6 +295,7 @@ class ProcessedDataCache:
             "timestamp": timestamp,
             "product": product,
             "extent": radar_data.get("extent", {}),
+            "projection": _make_json_serializable(radar_data.get("projection")),
             "dimensions": list(data.shape),
             "source_metadata": radar_data.get("metadata", {}),
             "cached_at": time.time(),
@@ -440,7 +433,7 @@ class ProcessedDataCache:
             return set()
 
         timestamps = set()
-        prefix = f"iradar-data/{source}/"
+        prefix = f"iradar-data/data/{source}/"
 
         try:
             paginator = uploader.s3_client.get_paginator("list_objects_v2")
@@ -522,7 +515,7 @@ class ProcessedDataCache:
             objects_to_delete = []
 
             for page in paginator.paginate(
-                Bucket=uploader.bucket, Prefix="iradar-data/"
+                Bucket=uploader.bucket, Prefix="iradar-data/data/"
             ):
                 for obj in page.get("Contents", []):
                     key = obj["Key"]

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 def test_shmu_colormap_availability():
     """Test that SHMU colormap is available and importable"""
     try:
-        from shmu_colormap import get_shmu_colormap, get_dbz_range
+        from imeteo_radar.config.shmu_colormap import get_shmu_colormap, get_dbz_range
         print("✅ SHMU colormap imports successfully")
         assert True  # Import succeeded
     except ImportError as e:
@@ -26,7 +26,7 @@ def test_shmu_colormap_availability():
 
 def test_discrete_dbz_increments():
     """Test that colormap provides discrete 1 dBZ increments"""
-    from shmu_colormap import get_shmu_colormap, get_dbz_range
+    from imeteo_radar.config.shmu_colormap import get_shmu_colormap, get_dbz_range
     
     cmap, norm = get_shmu_colormap()
     min_dbz, max_dbz = get_dbz_range()
@@ -57,7 +57,7 @@ def test_discrete_dbz_increments():
 
 def test_colormap_consistency():
     """Test that colormap returns consistent colors for same dBZ values"""
-    from shmu_colormap import get_color_for_dbz
+    from imeteo_radar.config.shmu_colormap import get_color_for_dbz
     
     # Test key dBZ values
     test_values = [-35, -20, 0, 20, 40, 60, 85]
@@ -83,7 +83,7 @@ def test_exporter_uses_shmu_colormap():
     """Test that the PNG exporter uses SHMU colormap exclusively"""
     
     try:
-        from radar_sources.exporter import PNGExporter
+        from imeteo_radar.processing.exporter import PNGExporter
         
         exporter = PNGExporter()
         
@@ -109,7 +109,7 @@ def test_no_fallback_colormaps():
     print("🔒 Testing that no fallbacks exist...")
     
     try:
-        from radar_sources.exporter import PNGExporter
+        from imeteo_radar.processing.exporter import PNGExporter
         exporter = PNGExporter()
         
         # Should only have reflectivity_shmu and possibly precipitation
@@ -127,7 +127,7 @@ def generate_colormap_sample():
     """Generate a sample showing the discrete colormap"""
     try:
         import matplotlib.pyplot as plt
-        from shmu_colormap import get_shmu_colormap, get_dbz_range
+        from imeteo_radar.config.shmu_colormap import get_shmu_colormap, get_dbz_range
         
         cmap, norm = get_shmu_colormap()
         min_dbz, max_dbz = get_dbz_range()

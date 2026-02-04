@@ -5,72 +5,141 @@ PNG Exporter for Radar Data
 Exports radar data as transparent PNG overlays with consistent colorscale.
 """
 
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 
-matplotlib.use("Agg")  # Use non-interactive backend
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
+from ..config.shmu_colormap import get_shmu_colormap
 from ..core.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Import SHMU colormap if available
-try:
-    from ..config.shmu_colormap import get_shmu_colormap
-
-    SHMU_COLORMAP_AVAILABLE = True
-except ImportError:
-    try:
-        from ..shmu_colormap import get_shmu_colormap
-
-        SHMU_COLORMAP_AVAILABLE = True
-    except ImportError:
-        try:
-            from shmu_colormap import get_shmu_colormap
-
-            SHMU_COLORMAP_AVAILABLE = True
-        except ImportError:
-            SHMU_COLORMAP_AVAILABLE = False
 
 
 class PNGExporter:
     """Exports radar data as transparent PNG overlays"""
 
-    def __init__(self):
+    def __init__(self, use_transform_cache: bool = True):
+        """Initialize PNG exporter.
+
+        Args:
+            use_transform_cache: Whether to use cached transform grids for
+                faster reprojection (10-50x speedup). Default True.
+        """
         self.colormaps = self._initialize_colormaps()
         self.colormap_luts = self._build_colormap_luts()
+        self._use_transform_cache = use_transform_cache
+        self._transform_cache = None
+
+    def _get_transform_cache(self):
+        """Lazy-initialize transform cache."""
+        if self._transform_cache is None and self._use_transform_cache:
+            try:
+                from .transform_cache import TransformCache
+
+                self._transform_cache = TransformCache()
+            except Exception as e:
+                logger.warning(f"Failed to initialize transform cache: {e}")
+                self._use_transform_cache = False
+        return self._transform_cache
+
+    def _reproject_with_cache(
+        self,
+        data: np.ndarray,
+        projection_info: dict[str, Any],
+        source_name: str,
+        extent: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, float], bool]:
+        """Attempt to reproject using cached transform grid.
+
+        Args:
+            data: Source data array
+            projection_info: Projection info dict with proj_def and where_attrs
+            source_name: Source identifier for cache lookup
+            extent: Extent dict with wgs84 bounds (used for WGS84 sources)
+
+        Returns:
+            Tuple of (reprojected_data, wgs84_bounds, success_flag)
+            If success_flag is False, caller should fall back to runtime reprojection
+        """
+        try:
+            from rasterio.transform import from_bounds
+
+            from ..core.projections import get_crs_wgs84
+            from .reprojector import build_native_params_from_projection_info
+            from .transform_cache import fast_reproject
+
+            cache = self._get_transform_cache()
+            if cache is None:
+                return data, {}, False
+
+            # Build native CRS, transform, and bounds from projection info
+            native_crs, native_transform, native_bounds = (
+                build_native_params_from_projection_info(data.shape, projection_info)
+            )
+
+            if native_crs is None:
+                # Try WGS84 path from extent bounds (for OMSZ, ARSO)
+                wgs84 = {}
+                if extent:
+                    wgs84 = extent.get("wgs84", extent)
+                if all(k in wgs84 for k in ("west", "east", "south", "north")):
+                    native_crs = get_crs_wgs84()
+                    native_transform = from_bounds(
+                        wgs84["west"],
+                        wgs84["south"],
+                        wgs84["east"],
+                        wgs84["north"],
+                        data.shape[1],
+                        data.shape[0],
+                    )
+                    native_bounds = (
+                        wgs84["west"],
+                        wgs84["south"],
+                        wgs84["east"],
+                        wgs84["north"],
+                    )
+                else:
+                    return data, {}, False
+
+            # Get or compute transform grid (checks memory, disk, S3)
+            grid = cache.get_or_compute(
+                source_name=source_name,
+                src_shape=data.shape,
+                native_crs=native_crs,
+                native_transform=native_transform,
+                native_bounds=native_bounds,
+            )
+
+            # Fast reprojection using precomputed indices
+            reprojected = fast_reproject(data, grid)
+
+            logger.debug(
+                f"Used cached transform for {source_name}: "
+                f"{data.shape} -> {grid.dst_shape}"
+            )
+
+            return reprojected, grid.wgs84_bounds, True
+
+        except Exception as e:
+            logger.warning(f"Cache reproject failed for {source_name}: {e}")
+            return data, {}, False
 
     def _initialize_colormaps(self):
         """Initialize colormaps - SHMU colormap is the single source of truth"""
         colormaps = {}
 
-        # SHMU reflectivity colormap - REQUIRED, no fallbacks
-        if not SHMU_COLORMAP_AVAILABLE:
-            raise ImportError(
-                "shmu_colormap.py is required and must be available. "
-                "This is the single source of truth for colorscales."
-            )
-
-        try:
-            shmu_cmap, shmu_norm = get_shmu_colormap()
-            colormaps["reflectivity_shmu"] = {
-                "name": "reflectivity_shmu",
-                "colormap": shmu_cmap,
-                "norm": shmu_norm,
-                "units": "dBZ",
-                "range": [-35, 85],
-            }
-            logger.info("SHMU colormap loaded as single source of colorscale")
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to load SHMU colormap: {e}. "
-                "shmu_colormap.py must be available as single source of truth."
-            )
+        shmu_cmap, shmu_norm = get_shmu_colormap()
+        colormaps["reflectivity_shmu"] = {
+            "name": "reflectivity_shmu",
+            "colormap": shmu_cmap,
+            "norm": shmu_norm,
+            "units": "dBZ",
+            "range": [-35, 85],
+        }
+        logger.info("SHMU colormap loaded as single source of colorscale")
 
         return colormaps
 
@@ -114,142 +183,12 @@ class PNGExporter:
         output_path: Path,
         extent: dict[str, Any],
         colormap_type: str = "auto",
-        dpi: int = 150,
         transparent_background: bool = True,
+        reproject: bool = True,
+        use_cached_transform: bool = True,
     ) -> tuple[Path, dict[str, Any]]:
         """
-        Export radar data as transparent PNG
-
-        Args:
-            radar_data: Processed radar data dictionary
-            output_path: Output PNG file path
-            extent: Geographic extent information
-            colormap_type: Colormap to use ('auto', 'reflectivity_shmu', 'precipitation')
-            dpi: Output resolution in DPI
-            transparent_background: Whether to make background transparent
-
-        Returns:
-            Tuple of (output_path, metadata)
-        """
-
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            data = radar_data["data"]
-            if isinstance(data, list):
-                data = np.array(data)
-
-            logger.debug(
-                f"Exporting {data.shape} array to PNG: {output_path}",
-                extra={"operation": "export"},
-            )
-
-            # Determine colormap
-            cmap_info = self._select_colormap(radar_data, colormap_type)
-
-            # Create figure with exact data dimensions
-            fig_width = data.shape[1] / dpi
-            fig_height = data.shape[0] / dpi
-
-            fig, ax = plt.subplots(figsize=(fig_width, fig_height), frameon=False)
-
-            # Remove all margins and axes
-            ax.set_position((0, 0, 1, 1))
-            ax.axis("off")
-
-            # Plot image using colormap directly (like your example code)
-            plot_extent = self._get_plot_extent(radar_data, extent)
-
-            # Mask values below minimum threshold as NaN for transparency
-            data_masked = data.copy()
-            min_threshold = cmap_info.get("range", [-35, 85])[0]
-            data_masked[data < min_threshold] = np.nan
-
-            # Create colormap copy with transparency for NaN/bad values
-            cmap_copy = cmap_info["colormap"].copy()
-            cmap_copy.set_bad(alpha=0)  # Make NaN values transparent
-            cmap_copy.set_under(alpha=0)  # Make below-threshold values transparent
-
-            ax.imshow(
-                data_masked,  # Use masked data
-                extent=tuple(plot_extent),
-                origin="upper",
-                interpolation="nearest",
-                cmap=cmap_copy,  # Use colormap with transparency
-                norm=cmap_info["norm"],  # Use the discrete normalization
-                aspect="auto",
-            )
-
-            # Save with transparency
-            plt.savefig(
-                output_path,
-                dpi=dpi,
-                bbox_inches="tight",
-                pad_inches=0,
-                transparent=transparent_background,
-                facecolor="none" if transparent_background else "white",
-                pil_kwargs={"optimize": True, "compress_level": 9},
-            )
-
-            plt.close(fig)
-
-            # Post-process: Convert to indexed PNG for smaller file size
-            try:
-                img = Image.open(output_path)
-                if transparent_background:
-                    img = img.convert("P", palette=Image.ADAPTIVE, colors=256)
-                else:
-                    img = img.convert("RGB").convert(
-                        "P", palette=Image.ADAPTIVE, colors=256
-                    )
-                img.save(output_path, format="PNG", optimize=True, compress_level=9)
-            except Exception as e:
-                logger.warning(
-                    f"Could not convert to indexed PNG: {e}, keeping original",
-                    extra={"operation": "export"},
-                )
-
-            # Create metadata without duplicating extent information
-            metadata = {
-                "file_path": str(output_path),
-                "dimensions": data.shape,
-                "extent_reference": "config/extent_index.json",
-                "source": radar_data.get("metadata", {}).get("source", "unknown"),
-                "colormap": cmap_info["name"],
-                "units": cmap_info["units"],
-                "data_range": [float(np.nanmin(data)), float(np.nanmax(data))],
-                "valid_pixels": int(np.sum(~np.isnan(data))),
-                "dpi": dpi,
-                "transparent": transparent_background,
-                "timestamp": radar_data.get("timestamp", "unknown"),
-                "format": "PNG (8-bit indexed palette, optimized)",
-            }
-
-            logger.info(
-                f"Saved: {output_path}",
-                extra={"operation": "export"},
-            )
-            logger.debug(
-                f"Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {cmap_info['units']}",
-            )
-
-            return output_path, metadata
-
-        except Exception as e:
-            logger.error(f"PNG export failed: {e}")
-            raise
-
-    def export_png_fast(
-        self,
-        radar_data: dict[str, Any],
-        output_path: Path,
-        extent: dict[str, Any],
-        colormap_type: str = "auto",
-        transparent_background: bool = True,
-    ) -> tuple[Path, dict[str, Any]]:
-        """
-        Fast PNG export using PIL (4-10x faster than matplotlib)
+        Export radar data as transparent PNG using PIL with LUT-based colormap.
 
         Args:
             radar_data: Radar data dictionary with 'data' array
@@ -257,6 +196,9 @@ class PNGExporter:
             extent: Geographic extent information
             colormap_type: Type of colormap to use ('auto', 'shmu', etc.)
             transparent_background: Whether to make background transparent
+            reproject: Whether to reproject data to Web Mercator (EPSG:3857)
+            use_cached_transform: Whether to use cached transform grids for
+                faster reprojection. Default True.
 
         Returns:
             Tuple of (saved_path, metadata_dict)
@@ -267,6 +209,87 @@ class PNGExporter:
 
             if data is None or data.size == 0:
                 raise ValueError("Empty or invalid radar data")
+
+            # Optionally reproject to Web Mercator for proper web map display
+            output_extent = extent
+            used_cache = False
+
+            if reproject:
+                # Get projection info from radar_data if available
+                projection_info = radar_data.get("projection")
+                source_name = radar_data.get("metadata", {}).get("source", "").lower()
+
+                # Try fast path with cached transform first
+                # Works for both projected sources (with proj_def) and WGS84 sources
+                if (
+                    use_cached_transform
+                    and self._use_transform_cache
+                    and projection_info
+                ):
+                    data, wgs84_bounds, used_cache = self._reproject_with_cache(
+                        data,
+                        projection_info,
+                        source_name,
+                        extent=radar_data.get("extent", extent),
+                    )
+                    if used_cache:
+                        output_extent = {"wgs84": wgs84_bounds}
+
+                # Runtime reprojection if cache not used
+                if not used_cache:
+                    from rasterio.transform import from_bounds as rt_from_bounds
+
+                    from ..core.projections import get_crs_wgs84
+                    from .reprojector import (
+                        build_native_params_from_projection_info,
+                        reproject_to_web_mercator,
+                    )
+
+                    data_extent = radar_data.get("extent", extent)
+
+                    # Build native CRS params from projection info
+                    native_crs, native_transform, native_bounds = (
+                        build_native_params_from_projection_info(
+                            data.shape, projection_info
+                        )
+                    )
+
+                    # WGS84 sources (OMSZ, ARSO) — build params from extent
+                    if native_crs is None:
+                        wgs84 = {}
+                        if data_extent:
+                            wgs84 = (
+                                data_extent.get("wgs84", data_extent)
+                                if isinstance(data_extent, dict)
+                                else {}
+                            )
+                        if not all(
+                            k in wgs84 for k in ("west", "east", "south", "north")
+                        ):
+                            raise ValueError(
+                                f"Cannot reproject: no projection info and no WGS84 extent bounds"
+                            )
+                        native_crs = get_crs_wgs84()
+                        native_transform = rt_from_bounds(
+                            wgs84["west"],
+                            wgs84["south"],
+                            wgs84["east"],
+                            wgs84["north"],
+                            data.shape[1],
+                            data.shape[0],
+                        )
+                        native_bounds = (
+                            wgs84["west"],
+                            wgs84["south"],
+                            wgs84["east"],
+                            wgs84["north"],
+                        )
+
+                    # Single reprojection path for all sources
+                    data, wgs84_bounds, _ = reproject_to_web_mercator(
+                        data, native_crs, native_transform, native_bounds
+                    )
+                    output_extent = {"wgs84": wgs84_bounds}
 
             logger.debug(
                 f"Fast PNG export: {data.shape} -> {output_path}",
@@ -336,19 +359,23 @@ class PNGExporter:
                 compress_level=9,  # Maximum compression for smallest file size
             )
 
-            # Create metadata
+            # Create metadata with extent info for Leaflet overlays
+            wgs84_extent = output_extent.get("wgs84", extent.get("wgs84", {}))
             metadata = {
                 "file_path": str(output_path),
                 "dimensions": data.shape,
+                "extent": wgs84_extent,  # WGS84 bounds for Leaflet ImageOverlay
                 "extent_reference": "config/extent_index.json",
                 "source": radar_data.get("metadata", {}).get("source", "unknown"),
                 "colormap": cmap_name,
                 "units": lut_info["units"],
                 "data_range": [float(np.nanmin(data)), float(np.nanmax(data))],
                 "valid_pixels": int(np.sum(valid_mask)),
+                "used_cached_transform": used_cache,
                 "transparent": transparent_background,
                 "timestamp": radar_data.get("timestamp", "unknown"),
                 "export_method": "PIL_fast_LUT",
+                "reprojected": reproject,
                 "format": "PNG (8-bit indexed palette, optimized)",
             }
 
@@ -362,18 +389,9 @@ class PNGExporter:
 
             return output_path, metadata
 
-        except Exception as e:
-            logger.error(f"Fast PNG export failed: {e}")
-            # Fallback to matplotlib method
-            logger.info("Falling back to matplotlib export...", extra={"operation": "export"})
-            return self.export_png(
-                radar_data,
-                output_path,
-                extent,
-                colormap_type,
-                150,
-                transparent_background,
-            )
+        except Exception:
+            logger.error(f"PNG export failed for {output_path}", exc_info=True)
+            raise
 
     def _select_colormap(
         self, radar_data: dict[str, Any], colormap_type: str
@@ -415,56 +433,3 @@ class PNGExporter:
                 f"Unknown data type (units: {units}, quantity: {quantity}), using SHMU colormap",
             )
             return {"name": "reflectivity_shmu", **self.colormaps["reflectivity_shmu"]}
-
-    def _get_plot_extent(
-        self, radar_data: dict[str, Any], extent: dict[str, Any]
-    ) -> list:
-        """Get extent for matplotlib plot"""
-
-        if "wgs84" in extent:
-            wgs84 = extent["wgs84"]
-            return [wgs84["west"], wgs84["east"], wgs84["south"], wgs84["north"]]
-        else:
-            # Fallback to data coordinates
-            coords = radar_data.get("coordinates", {})
-            if "lons" in coords and "lats" in coords:
-                lons = coords["lons"]
-                lats = coords["lats"]
-                return [lons[0], lons[-1], lats[-1], lats[0]]
-
-        return [0, 1, 0, 1]  # Default
-
-    def create_colorbar_legend(
-        self, colormap_type: str, output_path: Path, width: int = 300, height: int = 50
-    ) -> Path:
-        """Create a separate colorbar legend PNG"""
-
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if colormap_type not in self.colormaps:
-            raise ValueError(f"Unknown colormap: {colormap_type}")
-
-        cmap_info = self.colormaps[colormap_type]
-
-        fig, ax = plt.subplots(figsize=(width / 100, height / 100))
-
-        # Create colorbar
-        colorbar = plt.colorbar(
-            plt.cm.ScalarMappable(norm=cmap_info["norm"], cmap=cmap_info["colormap"]),
-            cax=ax,
-            orientation="horizontal",
-        )
-
-        colorbar.set_label(f"Radar {cmap_info['units']}", fontsize=10)
-
-        plt.savefig(output_path, dpi=100, bbox_inches="tight", transparent=True)
-
-        plt.close(fig)
-
-        logger.info(
-            f"Saved: {output_path}",
-            extra={"operation": "export"},
-        )
-
-        return output_path

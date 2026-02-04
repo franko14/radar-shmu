@@ -98,16 +98,18 @@ class SpacesUploader:
             # Test connection by checking if bucket exists
             self.s3_client.head_bucket(Bucket=self.bucket)
 
-        except NoCredentialsError:
-            raise ValueError("Invalid DigitalOcean Spaces credentials")
+        except NoCredentialsError as e:
+            raise ValueError("Invalid DigitalOcean Spaces credentials") from e
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             if error_code == "404":
-                raise ValueError(f"Bucket '{self.bucket}' not found")
+                raise ValueError(f"Bucket '{self.bucket}' not found") from e
             elif error_code == "403":
-                raise ValueError(f"Access denied to bucket '{self.bucket}'")
+                raise ValueError(f"Access denied to bucket '{self.bucket}'") from e
             else:
-                raise ValueError(f"Failed to connect to DigitalOcean Spaces: {e}")
+                raise ValueError(
+                    f"Failed to connect to DigitalOcean Spaces: {e}"
+                ) from e
 
     def upload_file(self, local_path: Path, source: str, filename: str) -> str | None:
         """
@@ -156,6 +158,49 @@ class SpacesUploader:
             return None
         except Exception as e:
             logger.error(f"Unexpected error during upload: {e}")
+            return None
+
+    def upload_metadata(
+        self, local_path: Path, s3_key: str, content_type: str = "application/json"
+    ) -> str | None:
+        """
+        Upload a metadata file (extent JSON, coverage mask PNG) to Spaces.
+
+        Args:
+            local_path: Local file path to upload
+            s3_key: Full S3 key (e.g., 'iradar-data/extent/dwd/extent_index.json')
+            content_type: MIME type (default: application/json)
+
+        Returns:
+            str: Public URL of uploaded file, or None if upload failed
+        """
+        local_path = Path(local_path)
+
+        if not local_path.exists():
+            logger.error(f"Local file not found: {local_path}")
+            return None
+
+        try:
+            self.s3_client.upload_file(
+                str(local_path),
+                self.bucket,
+                s3_key,
+                ExtraArgs={"ACL": "public-read", "ContentType": content_type},
+            )
+
+            public_url = f"{self.spaces_url}/{s3_key}"
+
+            logger.info(
+                f"Uploaded metadata to Spaces: {s3_key}",
+                extra={"operation": "upload"},
+            )
+            return public_url
+
+        except ClientError as e:
+            logger.error(f"Failed to upload metadata to Spaces: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during metadata upload: {e}")
             return None
 
     def delete_file(self, source: str, filename: str) -> bool:
