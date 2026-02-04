@@ -98,16 +98,18 @@ class SpacesUploader:
             # Test connection by checking if bucket exists
             self.s3_client.head_bucket(Bucket=self.bucket)
 
-        except NoCredentialsError:
-            raise ValueError("Invalid DigitalOcean Spaces credentials")
+        except NoCredentialsError as e:
+            raise ValueError("Invalid DigitalOcean Spaces credentials") from e
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             if error_code == "404":
-                raise ValueError(f"Bucket '{self.bucket}' not found")
+                raise ValueError(f"Bucket '{self.bucket}' not found") from e
             elif error_code == "403":
-                raise ValueError(f"Access denied to bucket '{self.bucket}'")
+                raise ValueError(f"Access denied to bucket '{self.bucket}'") from e
             else:
-                raise ValueError(f"Failed to connect to DigitalOcean Spaces: {e}")
+                raise ValueError(
+                    f"Failed to connect to DigitalOcean Spaces: {e}"
+                ) from e
 
     def upload_file(self, local_path: Path, source: str, filename: str) -> str | None:
         """

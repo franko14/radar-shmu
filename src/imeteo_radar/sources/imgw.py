@@ -30,7 +30,6 @@ from ..utils.hdf5_utils import (
 from ..utils.parallel_download import (
     create_download_result,
     create_error_result,
-    execute_parallel_downloads,
 )
 from ..utils.timestamps import (
     TimestampFormat,
@@ -140,7 +139,6 @@ class IMGWRadarSource(RadarSource):
             pass
         return None
 
-
     def _check_timestamp_availability(self, timestamp: str, product: str) -> bool:
         """Check if data is available for a specific timestamp and product
 
@@ -167,7 +165,6 @@ class IMGWRadarSource(RadarSource):
         product_config = self.product_mapping[product]
         hvd_folder = product_config["hvd_folder"]
         return f"{self.download_base_url}/{hvd_folder}/{timestamp}00dBZ.cmax.h5"
-
 
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
@@ -345,7 +342,9 @@ class IMGWRadarSource(RadarSource):
 
                 # Get and decode attributes - IMGW stores scaling in dataset1/what (NOT data1/what)
                 what_attrs = decode_hdf5_attrs(dict(f["dataset1/what"].attrs))
-                what_global = decode_hdf5_attrs(dict(f["what"].attrs))  # Global metadata
+                what_global = decode_hdf5_attrs(
+                    dict(f["what"].attrs)
+                )  # Global metadata
                 where_attrs = decode_hdf5_attrs(dict(f["where"].attrs))
 
                 # Extract projection definition from HDF5 (IMGW may use native projection)
@@ -388,14 +387,16 @@ class IMGWRadarSource(RadarSource):
                     ll_lon, ll_lat = 13.0, 48.1
                     ur_lon, ur_lat = 26.4, 56.2
 
-                lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
+                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
+                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
 
                 # Extract metadata
                 product = what_attrs.get("product", "MAX")
                 quantity = what_attrs.get("quantity", "DBZH")
                 start_date = what_attrs.get("startdate", what_global.get("date", ""))
-                start_time_str = what_attrs.get("starttime", what_global.get("time", ""))
+                start_time_str = what_attrs.get(
+                    "starttime", what_global.get("time", "")
+                )
                 timestamp = str(start_date) + str(start_time_str)
 
                 # Build projection info for reprojector
@@ -444,7 +445,7 @@ class IMGWRadarSource(RadarSource):
                 }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process IMGW file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process IMGW file {file_path}: {e}") from e
 
     def get_extent(self) -> dict[str, Any]:
         """Get IMGW radar coverage extent"""

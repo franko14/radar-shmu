@@ -20,7 +20,9 @@ try:
     PYPROJ_AVAILABLE = True
 except ImportError:
     PYPROJ_AVAILABLE = False
-    warnings.warn("pyproj not available - projection handling will be limited")
+    warnings.warn(
+        "pyproj not available - projection handling will be limited", stacklevel=2
+    )
 
 
 class ProjectionHandler:
@@ -32,7 +34,9 @@ class ProjectionHandler:
     def create_transformer(self, src_crs: str, dst_crs: str) -> Optional["Transformer"]:
         """Create and cache a coordinate transformer"""
         if not PYPROJ_AVAILABLE:
-            warnings.warn("pyproj not available - cannot create transformer")
+            warnings.warn(
+                "pyproj not available - cannot create transformer", stacklevel=2
+            )
             return None
 
         key = f"{src_crs}_to_{dst_crs}"
@@ -42,7 +46,7 @@ class ProjectionHandler:
                 dst = CRS.from_string(dst_crs)
                 self.transformers[key] = Transformer.from_crs(src, dst, always_xy=True)
             except Exception as e:
-                warnings.warn(f"Failed to create transformer {key}: {e}")
+                warnings.warn(f"Failed to create transformer {key}: {e}", stacklevel=2)
                 return None
 
         return self.transformers[key]
@@ -139,7 +143,7 @@ class ProjectionHandler:
             return lons_1d, lats_1d
 
         except Exception as e:
-            warnings.warn(f"DWD coordinate creation failed: {e}")
+            warnings.warn(f"DWD coordinate creation failed: {e}", stacklevel=2)
             return self._fallback_dwd_coordinates(shape, where_attrs)
 
     def _fallback_dwd_coordinates(
@@ -147,7 +151,9 @@ class ProjectionHandler:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Fallback 1D coordinate creation using corner averaging (less accurate)"""
 
-        warnings.warn("Using fallback coordinate creation - accuracy reduced")
+        warnings.warn(
+            "Using fallback coordinate creation - accuracy reduced", stacklevel=2
+        )
 
         # Extract corner coordinates
         ul_lon = float(where_attrs.get("UL_lon", 1.46))
@@ -261,7 +267,9 @@ class ProjectionHandler:
         """Transform coordinates between projections"""
 
         if not PYPROJ_AVAILABLE:
-            warnings.warn("pyproj not available - returning original coordinates")
+            warnings.warn(
+                "pyproj not available - returning original coordinates", stacklevel=2
+            )
             return x, y
 
         transformer = self.create_transformer(src_proj, dst_proj)
@@ -271,7 +279,7 @@ class ProjectionHandler:
         try:
             return transformer.transform(x, y)
         except Exception as e:
-            warnings.warn(f"Coordinate transformation failed: {e}")
+            warnings.warn(f"Coordinate transformation failed: {e}", stacklevel=2)
             return x, y
 
 

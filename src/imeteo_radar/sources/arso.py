@@ -194,7 +194,10 @@ class ARSORadarSource(RadarSource):
         # Check if we have enough data
         expected_size = width * height
         if len(raw_array) < expected_size:
-            logger.warning(f"Expected {expected_size} values, got {len(raw_array)}", extra={"source": "arso"})
+            logger.warning(
+                f"Expected {expected_size} values, got {len(raw_array)}",
+                extra={"source": "arso"},
+            )
             # Pad with nodata
             raw_array = np.pad(
                 raw_array, (0, expected_size - len(raw_array)), constant_values=offset
@@ -328,7 +331,9 @@ class ARSORadarSource(RadarSource):
             try:
                 url = self._get_product_url(product)
                 # Download just enough to parse the header (first 2KB)
-                response = requests.get(url, timeout=30, headers={"Range": "bytes=0-2048"})
+                response = requests.get(
+                    url, timeout=30, headers={"Range": "bytes=0-2048"}
+                )
                 if response.status_code in [200, 206]:
                     content = response.text
                     header = self._parse_srd_header(content)
@@ -337,7 +342,9 @@ class ARSORadarSource(RadarSource):
                         timestamp = f"{time_parts[0]:04d}{time_parts[1]:02d}{time_parts[2]:02d}{time_parts[3]:02d}{time_parts[4]:02d}00"
                         return [timestamp]
             except Exception as e:
-                logger.debug(f"Could not fetch ARSO timestamp: {e}", extra={"source": "arso"})
+                logger.debug(
+                    f"Could not fetch ARSO timestamp: {e}", extra={"source": "arso"}
+                )
                 continue
 
         return []
@@ -418,11 +425,17 @@ class ARSORadarSource(RadarSource):
         if products is None:
             products = ["zm"]  # Default to max reflectivity
 
-        logger.info(f"Downloading ARSO radar data ({', '.join(products)})...", extra={"source": "arso"})
+        logger.info(
+            f"Downloading ARSO radar data ({', '.join(products)})...",
+            extra={"source": "arso"},
+        )
 
         # Note: ARSO doesn't provide historical data via public URL
         if count > 1 or start_time or end_time:
-            logger.warning("ARSO only provides latest data (no archive access)", extra={"source": "arso"})
+            logger.warning(
+                "ARSO only provides latest data (no archive access)",
+                extra={"source": "arso"},
+            )
 
         downloaded_files = []
 
@@ -442,7 +455,9 @@ class ARSORadarSource(RadarSource):
                         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M00")
                     result["timestamp"] = timestamp
                 except Exception as e:
-                    logger.warning(f"Could not parse timestamp: {e}", extra={"source": "arso"})
+                    logger.warning(
+                        f"Could not parse timestamp: {e}", extra={"source": "arso"}
+                    )
                     result["timestamp"] = datetime.utcnow().strftime("%Y%m%d%H%M00")
 
                 downloaded_files.append(result)
@@ -454,9 +469,15 @@ class ARSORadarSource(RadarSource):
                         extra={"source": "arso"},
                     )
             else:
-                logger.error(f"Failed {product}: {result.get('error', 'Unknown error')}", extra={"source": "arso"})
+                logger.error(
+                    f"Failed {product}: {result.get('error', 'Unknown error')}",
+                    extra={"source": "arso"},
+                )
 
-        logger.info(f"ARSO: Downloaded {len(downloaded_files)} files", extra={"source": "arso", "count": len(downloaded_files)})
+        logger.info(
+            f"ARSO: Downloaded {len(downloaded_files)} files",
+            extra={"source": "arso", "count": len(downloaded_files)},
+        )
         return downloaded_files
 
     def process_to_array(self, file_path: str) -> dict[str, Any]:
@@ -523,7 +544,7 @@ class ARSORadarSource(RadarSource):
             }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process ARSO file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process ARSO file {file_path}: {e}") from e
 
     def _get_units(self, unit: str) -> str:
         """Get human-readable units"""

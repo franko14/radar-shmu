@@ -31,7 +31,6 @@ from ..utils.hdf5_utils import (
 from ..utils.parallel_download import (
     create_download_result,
     create_error_result,
-    execute_parallel_downloads,
 )
 from ..utils.timestamps import (
     TimestampFormat,
@@ -132,7 +131,9 @@ class SHMURadarSource(RadarSource):
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
-            return create_error_result(timestamp, product, f"Unknown product: {product}")
+            return create_error_result(
+                timestamp, product, f"Unknown product: {product}"
+            )
 
         try:
             # Check session cache
@@ -291,8 +292,8 @@ class SHMURadarSource(RadarSource):
                 ur_lon = float(where_attrs["UR_lon"])
                 ur_lat = float(where_attrs["UR_lat"])
 
-                lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                lats = np.linspace(ur_lat, ll_lat, data.shape[0])
+                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
+                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])
 
                 # Extract metadata
                 product = what_attrs.get("product", "UNKNOWN")
@@ -342,7 +343,7 @@ class SHMURadarSource(RadarSource):
                 }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process SHMU file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process SHMU file {file_path}: {e}") from e
 
     def get_extent(self) -> dict[str, Any]:
         """Get SHMU radar coverage extent"""

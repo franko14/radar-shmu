@@ -21,7 +21,6 @@ from ..core.logging import get_logger
 from ..utils.parallel_download import (
     create_download_result,
     create_error_result,
-    execute_parallel_downloads,
 )
 from ..utils.timestamps import (
     TimestampFormat,
@@ -157,7 +156,9 @@ class OMSZRadarSource(RadarSource):
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
-            return create_error_result(timestamp, product, f"Unknown product: {product}")
+            return create_error_result(
+                timestamp, product, f"Unknown product: {product}"
+            )
 
         try:
             # Check if we've already downloaded this file in this session
@@ -223,8 +224,10 @@ class OMSZRadarSource(RadarSource):
         # Filter by time range if specified
         if start_time and end_time:
             test_timestamps = filter_timestamps_by_range(
-                test_timestamps, start_time, end_time,
-                parse_format=TimestampFormat.UNDERSCORE
+                test_timestamps,
+                start_time,
+                end_time,
+                parse_format=TimestampFormat.UNDERSCORE,
             )
 
         # Find available timestamps
@@ -363,8 +366,8 @@ class OMSZRadarSource(RadarSource):
                 east = lo1 + (n_lon - 1) * dx
 
                 # Create coordinate arrays
-                lons = np.linspace(west, east, n_lon)
-                lats = np.linspace(north, south, n_lat)  # North to south
+                _lons = np.linspace(west, east, n_lon)
+                _lats = np.linspace(north, south, n_lat)  # North to south
 
                 # Build projection info for reprojector
                 # OMSZ uses pure WGS84 lat/lon grid (NetCDF format)
@@ -374,8 +377,8 @@ class OMSZRadarSource(RadarSource):
                     "grid_params": {
                         "La1": la1,  # First latitude (north)
                         "Lo1": lo1,  # First longitude (west)
-                        "Dx": dx,    # Longitude increment
-                        "Dy": dy,    # Latitude increment
+                        "Dx": dx,  # Longitude increment
+                        "Dy": dy,  # Latitude increment
                         "n_lat": n_lat,
                         "n_lon": n_lon,
                     },
@@ -408,7 +411,7 @@ class OMSZRadarSource(RadarSource):
                 }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process OMSZ file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process OMSZ file {file_path}: {e}") from e
 
     def get_extent(self) -> dict[str, Any]:
         """Get OMSZ radar coverage extent
@@ -495,7 +498,9 @@ class OMSZRadarSource(RadarSource):
                     "dimensions": dimensions,
                 }
         except Exception as e:
-            raise RuntimeError(f"Failed to extract OMSZ extent from {file_path}: {e}")
+            raise RuntimeError(
+                f"Failed to extract OMSZ extent from {file_path}: {e}"
+            ) from e
 
     def cleanup_temp_files(self) -> int:
         """Clean up temporary files and parent temp directories.
@@ -520,8 +525,14 @@ class OMSZRadarSource(RadarSource):
                     cleaned_count += 1
                 del self.temp_files[cache_key]
             except Exception as e:
-                logger.warning(f"Could not delete temp file {file_path}: {e}", extra={"source": "omsz"})
+                logger.warning(
+                    f"Could not delete temp file {file_path}: {e}",
+                    extra={"source": "omsz"},
+                )
 
         if cleaned_count > 0:
-            logger.debug(f"Cleaned up {cleaned_count} temporary OMSZ files", extra={"source": "omsz", "count": cleaned_count})
+            logger.debug(
+                f"Cleaned up {cleaned_count} temporary OMSZ files",
+                extra={"source": "omsz", "count": cleaned_count},
+            )
         return cleaned_count

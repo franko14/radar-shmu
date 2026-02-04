@@ -29,7 +29,6 @@ from ..utils.hdf5_utils import (
 from ..utils.parallel_download import (
     create_download_result,
     create_error_result,
-    execute_parallel_downloads,
 )
 from ..utils.timestamps import (
     TimestampFormat,
@@ -78,7 +77,6 @@ class CHMIRadarSource(RadarSource):
             }
         return super().get_product_metadata(product)
 
-
     def _check_timestamp_availability(self, timestamp: str, product: str) -> bool:
         """Check if data is available for a specific timestamp and product"""
         url = self._get_product_url(timestamp, product)
@@ -87,7 +85,6 @@ class CHMIRadarSource(RadarSource):
             return response.status_code == 200
         except Exception:
             return False
-
 
     def _get_product_url(self, timestamp: str, product: str) -> str:
         """Generate URL for CHMI product
@@ -104,7 +101,9 @@ class CHMIRadarSource(RadarSource):
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single radar file (for parallel processing)"""
         if product not in self.product_mapping:
-            return create_error_result(timestamp, product, f"Unknown product: {product}")
+            return create_error_result(
+                timestamp, product, f"Unknown product: {product}"
+            )
 
         try:
             # Check session cache
@@ -287,8 +286,8 @@ class CHMIRadarSource(RadarSource):
                     ll_lon, ll_lat = 11.266869, 48.047275
                     ur_lon, ur_lat = 19.623974, 51.458369
 
-                lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
+                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
+                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
 
                 # Extract metadata
                 product = what_dataset_attrs.get("product", "UNKNOWN")
@@ -338,7 +337,7 @@ class CHMIRadarSource(RadarSource):
                 }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process CHMI file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process CHMI file {file_path}: {e}") from e
 
     def get_extent(self) -> dict[str, Any]:
         """Get CHMI radar coverage extent"""

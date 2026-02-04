@@ -7,7 +7,7 @@ Handles downloading and processing of DWD radar composite data.
 
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,6 @@ from ..utils.hdf5_utils import (
 from ..utils.parallel_download import (
     create_download_result,
     create_error_result,
-    execute_parallel_downloads,
 )
 from ..utils.timestamps import (
     TimestampFormat,
@@ -129,7 +128,6 @@ class DWDRadarSource(RadarSource):
             logger.warning("No timestamp patterns found in DWD directory listing")
             return []
 
-
     @retry_with_backoff(
         max_retries=2,
         base_delay=0.5,
@@ -167,7 +165,9 @@ class DWDRadarSource(RadarSource):
     def _download_single_file(self, timestamp: str, product: str) -> dict[str, Any]:
         """Download a single DWD radar file (for parallel processing)"""
         if product not in self.product_mapping:
-            return create_error_result(timestamp, product, f"Unknown product: {product}")
+            return create_error_result(
+                timestamp, product, f"Unknown product: {product}"
+            )
 
         try:
             result = self._download_single_file_with_retry(timestamp, product)
@@ -286,7 +286,10 @@ class DWDRadarSource(RadarSource):
                 # Filter by time range if specified
                 if start_time and end_time:
                     filtered_timestamps = filter_timestamps_by_range(
-                        server_timestamps, start_time, end_time, parse_format=TimestampFormat.UNDERSCORE
+                        server_timestamps,
+                        start_time,
+                        end_time,
+                        parse_format=TimestampFormat.UNDERSCORE,
                     )
                     available_timestamps = filtered_timestamps[:count]
                 else:
@@ -410,7 +413,9 @@ class DWDRadarSource(RadarSource):
                 # Get scaling attributes from data1/what
                 data_what_attrs = {}
                 if "dataset1/data1/what" in f:
-                    data_what_attrs = decode_hdf5_attrs(dict(f["dataset1/data1/what"].attrs))
+                    data_what_attrs = decode_hdf5_attrs(
+                        dict(f["dataset1/data1/what"].attrs)
+                    )
 
                 # Get scaling parameters using shared utility
                 scaling = get_scaling_params(
@@ -500,7 +505,9 @@ class DWDRadarSource(RadarSource):
                         "quantity": metadata.get("quantity", "UNKNOWN"),
                         "timestamp": timestamp,
                         "source": "DWD",
-                        "units": get_quantity_units(metadata.get("quantity", "UNKNOWN")),
+                        "units": get_quantity_units(
+                            metadata.get("quantity", "UNKNOWN")
+                        ),
                         "nodata_value": np.nan,
                     },
                     "extent": {"wgs84": extent_bounds},
@@ -509,7 +516,7 @@ class DWDRadarSource(RadarSource):
                 }
 
         except Exception as e:
-            raise RuntimeError(f"Failed to process DWD file {file_path}: {e}")
+            raise RuntimeError(f"Failed to process DWD file {file_path}: {e}") from e
 
     def _extract_dwd_metadata(self, hdf_file, file_path: str) -> dict[str, Any]:
         """Extract metadata from DWD HDF5 file"""
@@ -635,6 +642,8 @@ class DWDRadarSource(RadarSource):
                     "dimensions": dimensions,
                 }
         except Exception as e:
-            raise RuntimeError(f"Failed to extract DWD extent from {file_path}: {e}")
+            raise RuntimeError(
+                f"Failed to extract DWD extent from {file_path}: {e}"
+            ) from e
 
     # cleanup_temp_files() is inherited from RadarSource base class
