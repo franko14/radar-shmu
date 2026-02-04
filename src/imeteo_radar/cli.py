@@ -54,7 +54,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="Radar source (DWD for Germany, SHMU for Slovakia, CHMI for Czechia, ARSO for Slovenia, OMSZ for Hungary, IMGW for Poland)",
     )
     fetch_parser.add_argument(
-        "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
+        "--output", type=Path, help="Output directory (default: /tmp/iradar/{country}/)"
     )
     fetch_parser.add_argument(
         "--backload", action="store_true", help="Enable backload of historical data"
@@ -96,8 +96,8 @@ def create_parser() -> argparse.ArgumentParser:
     fetch_parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("/tmp/iradar-data"),
-        help="Directory for processed data cache (default: /tmp/iradar-data)",
+        default=Path("/tmp/iradar-data/data"),
+        help="Directory for processed data cache (default: /tmp/iradar-data/data)",
     )
     fetch_parser.add_argument(
         "--cache-ttl",
@@ -132,7 +132,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="Radar source(s) to generate extent for",
     )
     extent_parser.add_argument(
-        "--output", type=Path, help="Output directory (default: /tmp/{country}/)"
+        "--output", type=Path, help="Output directory (default: /tmp/iradar/{country}/)"
     )
 
     # Composite command - merge multiple sources
@@ -148,8 +148,8 @@ def create_parser() -> argparse.ArgumentParser:
     composite_parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/tmp/composite"),
-        help="Output directory (default: /tmp/composite/)",
+        default=Path("/tmp/iradar/composite"),
+        help="Output directory (default: /tmp/iradar/composite/)",
     )
     composite_parser.add_argument(
         "--resolution",
@@ -226,8 +226,8 @@ def create_parser() -> argparse.ArgumentParser:
     composite_parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("/tmp/iradar-data"),
-        help="Directory for processed data cache (default: /tmp/iradar-data)",
+        default=Path("/tmp/iradar-data/data"),
+        help="Directory for processed data cache (default: /tmp/iradar-data/data)",
     )
     composite_parser.add_argument(
         "--cache-ttl",
@@ -343,8 +343,8 @@ def create_parser() -> argparse.ArgumentParser:
     coverage_parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/tmp"),
-        help="Base output directory (default: /tmp/) - masks saved alongside radar data",
+        default=Path("/tmp/iradar"),
+        help="Base output directory (default: /tmp/iradar/) - masks saved alongside radar data",
     )
     coverage_parser.add_argument(
         "--resolution",
@@ -428,26 +428,45 @@ def generate_extent_info(source, source_name: str, country_dir: str) -> dict:
     return extent_info
 
 
-def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
-    """Save extent information to JSON file"""
+def save_extent_index(
+    source_name: str, extent_info: dict, force: bool = False,
+    extent_base_dir: Path | None = None,
+    uploader=None,
+):
+    """Save extent information to JSON file at iradar-data/extent/{source}/
+
+    Canonical format:
+    {
+      "metadata": { "title": "...", "source": "dwd", "generated": "..." },
+      "wgs84": { "west": ..., "east": ..., "south": ..., "north": ... }
+    }
+
+    Args:
+        source_name: Source identifier (e.g., 'dwd', 'composite')
+        extent_info: Extent info dict with 'extent' and 'generated' keys
+        force: Overwrite existing file
+        extent_base_dir: Base dir for extent files (default: /tmp/iradar-data/extent)
+        uploader: Optional SpacesUploader for S3 upload
+    """
     import json
 
-    extent_file = output_dir / "extent_index.json"
+    base = extent_base_dir or Path("/tmp/iradar-data/extent")
+    extent_dir = base / source_name
+    extent_dir.mkdir(parents=True, exist_ok=True)
+    extent_file = extent_dir / "extent_index.json"
 
     # Check if file exists and skip if not forced
     if extent_file.exists() and not force:
         return False
 
-    # Create the full structure
+    # Build canonical extent_index.json
     extent_data = {
         "metadata": {
             "title": "Radar Coverage Extent",
-            "description": "Geographic extent and projection information for radar data",
-            "version": "1.0",
+            "source": extent_info.get("name", "").lower(),
             "generated": extent_info["generated"],
-            "coordinate_system": "WGS84 geographic coordinates (EPSG:4326)",
         },
-        "source": extent_info,
+        "wgs84": extent_info.get("extent", {}),
     }
 
     # Save to file
@@ -455,6 +474,12 @@ def save_extent_index(output_dir: Path, extent_info: dict, force: bool = False):
         json.dump(extent_data, f, indent=2)
 
     logger.info(f"Saved extent information to: {extent_file}")
+
+    # Upload to S3 if uploader available
+    if uploader:
+        s3_key = f"iradar-data/extent/{source_name}/extent_index.json"
+        uploader.upload_metadata(extent_file, s3_key, content_type="application/json")
+
     return True
 
 
@@ -539,7 +564,7 @@ def fetch_command(args) -> int:
 
         # Set output directory based on source
         if not args.output:
-            output_dir = Path(f"/tmp/{country_dir}/")
+            output_dir = Path(f"/tmp/iradar/{country_dir}/")
         else:
             output_dir = args.output
 
@@ -549,7 +574,8 @@ def fetch_command(args) -> int:
         # Generate and save extent information on first run or if requested
         extent_info = generate_extent_info(source, args.source.upper(), country_dir)
         save_extent_index(
-            output_dir, extent_info, force=getattr(args, "update_extent", False)
+            args.source, extent_info, force=getattr(args, "update_extent", False),
+            uploader=uploader if upload_enabled else None,
         )
 
         logger.info(
@@ -619,7 +645,7 @@ def fetch_command(args) -> int:
 
                     # Export to PNG with reprojection to Web Mercator
                     extent = source.get_extent()
-                    exporter.export_png_fast(
+                    exporter.export_png(
                         radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
@@ -753,7 +779,7 @@ def fetch_command(args) -> int:
                     radar_data["metadata"]["units"] = "dBZ"
 
                     # Export to PNG with reprojection to Web Mercator
-                    exporter.export_png_fast(
+                    exporter.export_png(
                         radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
@@ -807,7 +833,7 @@ def fetch_command(args) -> int:
                     radar_data["metadata"]["source"] = args.source
                     radar_data["metadata"]["units"] = "dBZ"
 
-                    exporter.export_png_fast(
+                    exporter.export_png(
                         radar_data=radar_data,
                         output_path=output_path,
                         extent=extent,
@@ -949,13 +975,7 @@ def extent_command(args) -> int:
             )
 
             # Save individual extent file
-            if args.output:
-                output_dir = args.output
-            else:
-                output_dir = Path(f"/tmp/{country_dir}")
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            save_extent_index(output_dir, extent_info, force=True)
+            save_extent_index(source_name, extent_info, force=True)
 
             # Add to combined structure
             combined_extent["sources"][source_name] = extent_info
@@ -1002,13 +1022,14 @@ def coverage_mask_command(args) -> int:
             generate_source_coverage_mask,
         )
 
-        output_base = str(args.output)
+        png_base = str(args.output)
 
         if args.composite:
             # Generate only composite mask
             result = generate_composite_coverage_mask(
                 sources=get_all_source_names(),
-                output_dir=os.path.join(output_base, "composite"),
+                output_dir="/tmp/iradar-data/mask/composite",
+                output_base_dir=png_base,
                 resolution_m=args.resolution,
             )
             return 0 if result else 1
@@ -1016,7 +1037,7 @@ def coverage_mask_command(args) -> int:
         elif args.source == "all":
             # Generate all masks (individual + composite)
             results = generate_all_coverage_masks(
-                output_base_dir=output_base, resolution_m=args.resolution
+                output_base_dir=png_base, resolution_m=args.resolution
             )
             return 0 if results else 1
 
@@ -1028,8 +1049,11 @@ def coverage_mask_command(args) -> int:
                 return 1
 
             folder = config["folder"]
-            output_dir = os.path.join(output_base, folder)
-            result = generate_source_coverage_mask(args.source, output_dir)
+            mask_dir = f"/tmp/iradar-data/mask/{args.source}"
+            png_dir = os.path.join(png_base, folder)
+            result = generate_source_coverage_mask(
+                args.source, output_dir=mask_dir, png_dir=png_dir
+            )
             return 0 if result else 1
 
     except ImportError as e:

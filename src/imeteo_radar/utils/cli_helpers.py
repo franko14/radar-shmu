@@ -43,7 +43,7 @@ def init_cache_from_args(
     s3_enabled = upload_enabled and not getattr(args, "no_cache_upload", False)
 
     cache = ProcessedDataCache(
-        local_dir=getattr(args, "cache_dir", Path("/tmp/iradar-data")),
+        local_dir=getattr(args, "cache_dir", Path("/tmp/iradar-data/data")),
         ttl_minutes=getattr(args, "cache_ttl", 60),
         s3_enabled=s3_enabled,
     )

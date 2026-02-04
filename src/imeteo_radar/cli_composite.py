@@ -17,13 +17,12 @@ logger = get_logger(__name__)
 
 # Fixed reference extent covering all sources (DWD, SHMU, CHMI, OMSZ, ARSO, IMGW)
 # Using this ensures consistent composite dimensions regardless of which sources are available
-# Calculated from the union of all source extents
-# DWD corners: UL(1.46, 55.86), UR(18.73, 55.85), LL(3.57, 45.70), LR(16.58, 45.68)
+# Values are the union of all source reprojected WGS84 bounds (from extent_index.json)
 REFERENCE_EXTENT = {
-    "west": 1.46,   # DWD UL corner (westernmost)
-    "east": 26.40,  # IMGW easternmost
-    "south": 44.00, # OMSZ southernmost
-    "north": 56.20, # IMGW northernmost
+    "west": 1.461077,   # DWD (westernmost)
+    "east": 26.376516,  # IMGW (easternmost)
+    "south": 44.001479, # OMSZ (southernmost)
+    "north": 56.398335, # IMGW (northernmost)
 }
 
 # Source classification for outage detection
@@ -918,7 +917,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 "units": "dBZ",
             }
             # Composite data is already in Web Mercator, no reprojection needed
-            exporter.export_png_fast(
+            exporter.export_png(
                 radar_data=radar_data_for_export,
                 output_path=output_path,
                 extent={"wgs84": composite["extent"]},
@@ -955,11 +954,19 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
 
     # Update extent index if processed any composites
     if processed_count > 0:
-        if args.update_extent or not (output_dir / "extent_index.json").exists():
+        extent_path = Path("/tmp/iradar-data/extent/composite/extent_index.json")
+        if args.update_extent or not extent_path.exists():
             if last_composite is not None:
                 _save_extent_index(
-                    output_dir, last_composite, list(available_sources.keys()), args.resolution
+                    output_dir, last_composite, list(available_sources.keys()),
+                    args.resolution, uploader=uploader,
                 )
+
+    # Auto-generate coverage masks if missing (first run)
+    # Use ALL configured sources, not just available ones — ARSO may be dropped
+    # from composite matching but still needs a coverage mask
+    if processed_count > 0 and not args.no_individual:
+        _auto_generate_masks_if_missing(list(sources.keys()), args, output_dir)
 
     # Log processing summary with skip reasons
     total_skipped = sum(len(v) for v in skip_reasons.values())
@@ -982,6 +989,12 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         logger.warning(
             f"  Processing failed: {len(skip_reasons['processing_failed'])} "
             f"[{', '.join(skip_reasons['processing_failed'][:3])}]"
+        )
+
+    # Export individual ARSO images when dropped from composite timestamp matching
+    if arso_dropped and not args.no_individual and "arso" in sources:
+        _export_dropped_arso(
+            sources, all_source_files, cache, exporter, args, uploader,
         )
 
     return 0
@@ -1043,6 +1056,7 @@ def _export_individual_sources(
         uploader: Optional SpacesUploader instance for uploading to DO Spaces
     """
     import json
+    from datetime import datetime
 
     composite_output = Path(args.output)
 
@@ -1069,7 +1083,7 @@ def _export_individual_sources(
 
         # Export to PNG with reprojection to Web Mercator
         logger.info(f"{source_name.upper()} -> {output_path}")
-        _, export_metadata = exporter.export_png_fast(
+        _, export_metadata = exporter.export_png(
             radar_data=radar_data,
             output_path=output_path,
             extent=radar_data["extent"],
@@ -1088,14 +1102,16 @@ def _export_individual_sources(
             except Exception as e:
                 logger.warning(f"Failed to upload {source_name}: {e}")
 
-        # Save extent_index.json with REPROJECTED bounds (matches the PNG)
-        extent_file = source_output_dir / "extent_index.json"
+        # Save extent_index.json with REPROJECTED bounds (canonical format)
+        extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
+        extent_dir.mkdir(parents=True, exist_ok=True)
+        extent_file = extent_dir / "extent_index.json"
         if not extent_file.exists() or args.update_extent:
             extent_data = {
                 "metadata": {
                     "title": f"{source_name.upper()} Radar Coverage",
-                    "description": f"Reprojected extent for {source_name.upper()} radar data",
                     "source": source_name,
+                    "generated": datetime.now().isoformat() + "Z",
                 },
                 "wgs84": reprojected_extent,
             }
@@ -1154,7 +1170,7 @@ def _export_single_source(
     # Export to PNG with reprojection to Web Mercator
     filename = f"{unix_timestamp}.png"
     logger.debug(f"{source_name.upper()} -> {output_path}")
-    _, export_metadata = exporter.export_png_fast(
+    _, export_metadata = exporter.export_png(
         radar_data=radar_data,
         output_path=output_path,
         extent=radar_data["extent"],
@@ -1173,19 +1189,169 @@ def _export_single_source(
         except Exception as e:
             logger.warning(f"Failed to upload {source_name}: {e}")
 
-    # Save extent_index.json with REPROJECTED bounds (matches the PNG)
-    extent_file = output_dir / "extent_index.json"
+    # Save extent_index.json with REPROJECTED bounds (canonical format)
+    extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
+    extent_dir.mkdir(parents=True, exist_ok=True)
+    extent_file = extent_dir / "extent_index.json"
     if not extent_file.exists() or args.update_extent:
+        from datetime import datetime
+
         extent_data = {
             "metadata": {
                 "title": f"{source_name.upper()} Radar Coverage",
-                "description": f"Reprojected extent for {source_name.upper()} radar data",
                 "source": source_name,
+                "generated": datetime.now().isoformat() + "Z",
             },
             "wgs84": reprojected_extent,
         }
         with open(extent_file, "w") as f:
             json.dump(extent_data, f, indent=2)
+
+        # Upload extent to S3
+        if uploader:
+            s3_key = f"iradar-data/extent/{source_name}/extent_index.json"
+            uploader.upload_metadata(
+                extent_file, s3_key, content_type="application/json"
+            )
+
+
+def _auto_generate_masks_if_missing(
+    source_names: list[str], args, composite_output: Path,
+) -> None:
+    """Auto-generate coverage masks on first run if they don't exist.
+
+    Checks for missing individual source masks and composite mask,
+    generating them from extent data when available. This eliminates the
+    need for a separate `imeteo-radar coverage-mask` command on first run.
+
+    Args:
+        source_names: List of ALL source identifiers to check (not just available)
+        args: CLI arguments (needs args.resolution)
+        composite_output: Path to composite output directory (e.g., ./outputs/composite)
+    """
+    from .processing.coverage_mask import (
+        generate_composite_coverage_mask,
+        generate_source_coverage_mask,
+    )
+
+    any_generated = False
+
+    # Check individual source masks for ALL sources
+    for source_name in source_names:
+        mask_path = Path(f"/tmp/iradar-data/mask/{source_name}/coverage_mask.png")
+        if not mask_path.exists():
+            extent_path = Path(f"/tmp/iradar-data/extent/{source_name}/extent_index.json")
+            if extent_path.exists():
+                # Resolve the actual PNG directory (sibling of composite dir)
+                png_dir = _get_individual_source_dir(source_name, composite_output)
+                if png_dir is None:
+                    continue
+                try:
+                    result = generate_source_coverage_mask(
+                        source_name, png_dir=str(png_dir),
+                    )
+                    if result:
+                        any_generated = True
+                        logger.info(f"Auto-generated coverage mask for {source_name}")
+                except Exception as e:
+                    logger.debug(f"Could not auto-generate mask for {source_name}: {e}")
+
+    # Check composite mask
+    composite_mask = Path("/tmp/iradar-data/mask/composite/coverage_mask.png")
+    if not composite_mask.exists():
+        composite_extent = Path("/tmp/iradar-data/extent/composite/extent_index.json")
+        if composite_extent.exists():
+            try:
+                result = generate_composite_coverage_mask(
+                    sources=source_names,
+                    output_base_dir=str(composite_output.parent),
+                    resolution_m=args.resolution,
+                )
+                if result:
+                    any_generated = True
+                    logger.info("Auto-generated composite coverage mask")
+            except Exception as e:
+                logger.debug(f"Could not auto-generate composite mask: {e}")
+
+    if any_generated:
+        logger.info("Coverage masks generated (first run)")
+
+
+def _export_dropped_arso(sources, all_source_files, cache, exporter, args, uploader):
+    """Export individual ARSO images when ARSO was dropped from composite matching.
+
+    ARSO data is cached in Step 4 of _process_latest(). When ARSO's timestamp
+    doesn't match other sources, it's excluded from the composite but the data
+    is still available in cache. This function loads it back and exports
+    individual PNGs so ARSO coverage is still visible on the map.
+
+    Args:
+        sources: Dict of source configurations {name: (source_obj, product)}
+        all_source_files: Dict of downloaded files {name: [file_info, ...]}
+        cache: ProcessedDataCache instance (or None)
+        exporter: PNGExporter instance
+        args: CLI arguments
+        uploader: Optional SpacesUploader instance
+    """
+    from datetime import datetime
+
+    import pytz
+
+    arso_source, arso_product = sources["arso"]
+
+    if "arso" not in all_source_files or not all_source_files["arso"]:
+        return
+
+    from .utils.cli_helpers import output_exists
+
+    exported_count = 0
+    for arso_file in all_source_files["arso"]:
+        ts = arso_file["timestamp"]
+        try:
+            dt = datetime.strptime(ts[:14], "%Y%m%d%H%M%S")
+        except ValueError:
+            try:
+                dt = datetime.strptime(ts[:12], "%Y%m%d%H%M")
+            except ValueError:
+                continue
+        dt_utc = pytz.UTC.localize(dt)
+        unix_ts = int(dt_utc.timestamp())
+
+        # Skip if already exported (e.g., from a previous run)
+        composite_output = Path(args.output)
+        arso_output_dir = _get_individual_source_dir("arso", composite_output)
+        if arso_output_dir:
+            arso_filename = f"{unix_ts}.png"
+            arso_output_path = arso_output_dir / arso_filename
+            if output_exists(arso_output_path, "arso", arso_filename, uploader):
+                continue
+
+        # Load from cache or process from file
+        radar_data = None
+        if arso_file.get("from_cache") and cache:
+            radar_data = cache.get("arso", ts, arso_product)
+        elif arso_file.get("path"):
+            try:
+                radar_data = arso_source.process_to_array(arso_file["path"])
+            except Exception as e:
+                logger.warning(f"Failed to process ARSO file: {e}")
+                continue
+
+        if radar_data is None:
+            continue
+
+        _export_single_source(
+            "arso", radar_data, exporter, unix_ts, ts, args, uploader,
+        )
+        exported_count += 1
+        del radar_data
+        gc.collect()
+
+    if exported_count > 0:
+        logger.info(
+            f"Exported {exported_count} individual ARSO image(s) "
+            "(excluded from composite due to timestamp mismatch)"
+        )
 
 
 def _process_backload(args, sources, exporter, output_dir, uploader=None):
@@ -1367,7 +1533,7 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
                 "units": "dBZ",
             }
             # Composite data is already in Web Mercator, no reprojection needed
-            exporter.export_png_fast(
+            exporter.export_png(
                 radar_data=radar_data_for_export,
                 output_path=output_path,
                 extent={"wgs84": composite["extent"]},
@@ -1408,32 +1574,56 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
     if args.update_extent or processed_count > 0:
         if last_composite is not None:
             _save_extent_index(
-                output_dir, last_composite, list(sources.keys()), args.resolution
+                output_dir, last_composite, list(sources.keys()),
+                args.resolution, uploader=uploader,
             )
+
+    # Auto-generate coverage masks if missing (first run)
+    if processed_count > 0 and not args.no_individual:
+        _auto_generate_masks_if_missing(list(sources.keys()), args, output_dir)
 
     return 0
 
 
-def _save_extent_index(output_dir, composite, source_names, resolution):
-    """Save extent index JSON"""
+def _save_extent_index(output_dir, composite, source_names, resolution, uploader=None):
+    """Save extent index JSON in canonical format to iradar-data/extent/composite/.
+
+    Canonical format:
+    {
+      "metadata": { "title": "...", "source": "composite", "generated": "..." },
+      "wgs84": { "west": ..., "east": ..., "south": ..., "north": ... }
+    }
+    """
     import json
     from datetime import datetime
 
     logger.info("Generating extent information...")
 
+    # composite["extent"] is {"wgs84": {...}} — extract the wgs84 dict
+    wgs84 = composite["extent"]
+    if isinstance(wgs84, dict) and "wgs84" in wgs84:
+        wgs84 = wgs84["wgs84"]
+
     extent_data = {
         "metadata": {
             "title": "Composite Radar Coverage",
-            "description": f"Combined extent from sources: {', '.join(source_names)}",
+            "source": "composite",
             "generated": datetime.now().isoformat() + "Z",
             "sources": source_names,
             "resolution_m": resolution,
         },
-        "extent": composite["extent"],
+        "wgs84": wgs84,
     }
 
-    extent_path = output_dir / "extent_index.json"
+    extent_dir = Path("/tmp/iradar-data/extent/composite")
+    extent_dir.mkdir(parents=True, exist_ok=True)
+    extent_path = extent_dir / "extent_index.json"
     with open(extent_path, "w") as f:
         json.dump(extent_data, f, indent=2)
 
     logger.info(f"Extent info saved to {extent_path}")
+
+    # Upload to S3 if uploader available
+    if uploader:
+        s3_key = "iradar-data/extent/composite/extent_index.json"
+        uploader.upload_metadata(extent_path, s3_key, content_type="application/json")

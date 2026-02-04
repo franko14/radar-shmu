@@ -158,6 +158,49 @@ class SpacesUploader:
             logger.error(f"Unexpected error during upload: {e}")
             return None
 
+    def upload_metadata(
+        self, local_path: Path, s3_key: str, content_type: str = "application/json"
+    ) -> str | None:
+        """
+        Upload a metadata file (extent JSON, coverage mask PNG) to Spaces.
+
+        Args:
+            local_path: Local file path to upload
+            s3_key: Full S3 key (e.g., 'iradar-data/extent/dwd/extent_index.json')
+            content_type: MIME type (default: application/json)
+
+        Returns:
+            str: Public URL of uploaded file, or None if upload failed
+        """
+        local_path = Path(local_path)
+
+        if not local_path.exists():
+            logger.error(f"Local file not found: {local_path}")
+            return None
+
+        try:
+            self.s3_client.upload_file(
+                str(local_path),
+                self.bucket,
+                s3_key,
+                ExtraArgs={"ACL": "public-read", "ContentType": content_type},
+            )
+
+            public_url = f"{self.spaces_url}/{s3_key}"
+
+            logger.info(
+                f"Uploaded metadata to Spaces: {s3_key}",
+                extra={"operation": "upload"},
+            )
+            return public_url
+
+        except ClientError as e:
+            logger.error(f"Failed to upload metadata to Spaces: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during metadata upload: {e}")
+            return None
+
     def delete_file(self, source: str, filename: str) -> bool:
         """
         Delete a file from DigitalOcean Spaces

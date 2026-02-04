@@ -372,7 +372,7 @@ Precomputed pixel-to-pixel index mappings stored in a three-tier cache for fast 
 | Tier | Location | Persistence | Use Case |
 |------|----------|-------------|----------|
 | Memory | In-process dict | Session only | Repeated operations in same run |
-| Local disk | `/tmp/radar-transforms/` | Container lifetime | Warm restarts |
+| Local disk | `/tmp/iradar-data/grid/` | Container lifetime | Warm restarts |
 | S3/DO Spaces | Cloud storage | Permanent | Pod restarts, new deployments |
 
 - Uses int16 indices (~4 bytes/pixel) for memory efficiency

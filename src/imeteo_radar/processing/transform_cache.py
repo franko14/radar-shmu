@@ -13,7 +13,7 @@ speedup over runtime reprojection.
 
 Storage Format:
 - Local: {cache_dir}/{source}_{width}x{height}_v{version}.npz
-- S3: transform-grids/{source}_{width}x{height}_v{version}.npz
+- S3: iradar-data/grid/{source}_{width}x{height}_v{version}.npz
 - NPZ contains: row_indices (int16), col_indices (int16), dst_shape, wgs84_bounds, metadata
 """
 
@@ -102,18 +102,18 @@ class TransformCache:
         self,
         local_cache_dir: Path | None = None,
         s3_bucket: str | None = None,
-        s3_prefix: str = "transform-grids/",
+        s3_prefix: str = "iradar-data/grid/",
         s3_enabled: bool = True,
     ):
         """Initialize the transform cache.
 
         Args:
-            local_cache_dir: Local cache directory (default: /tmp/radar-transforms)
+            local_cache_dir: Local cache directory (default: /tmp/iradar-data/grid)
             s3_bucket: S3 bucket name (from env if None)
             s3_prefix: S3 key prefix for transform grids
             s3_enabled: Whether to use S3 as tier 3 cache
         """
-        self.local_cache_dir = local_cache_dir or Path("/tmp/radar-transforms")
+        self.local_cache_dir = local_cache_dir or Path("/tmp/iradar-data/grid")
         self.s3_prefix = s3_prefix
         self.s3_enabled = s3_enabled
         self._s3_bucket = s3_bucket  # Will use env var if None
@@ -644,23 +644,46 @@ class TransformCache:
             where_attrs = projection_info.get("where_attrs", {})
 
             if not proj_def:
-                logger.warning(f"{source_name} uses WGS84, no transform caching needed")
-                return None
+                # WGS84 source (OMSZ, ARSO) — build native params from extent bounds
+                # WGS84→WebMercator IS a valid reprojection that benefits from caching
+                from rasterio.transform import from_bounds as _from_bounds
 
-            # Build native transform from projection info using unified function
-            from .reprojector import build_native_params_from_projection_info
+                extent = radar_data.get("extent", {})
+                wgs84 = extent.get("wgs84", extent)
+                if not all(k in wgs84 for k in ("west", "east", "south", "north")):
+                    logger.warning(
+                        f"{source_name} uses WGS84 but has no extent bounds, "
+                        "cannot precompute transform grid"
+                    )
+                    return None
 
-            projection_info_dict = {
-                "proj_def": proj_def,
-                "where_attrs": where_attrs,
-            }
-            native_crs, native_transform, native_bounds = (
-                build_native_params_from_projection_info(src_shape, projection_info_dict)
-            )
+                from ..core.projections import get_crs_wgs84
 
-            if native_crs is None:
-                logger.error(f"Could not build native params for {source_name}")
-                return None
+                native_crs = get_crs_wgs84()
+                native_transform = _from_bounds(
+                    wgs84["west"], wgs84["south"],
+                    wgs84["east"], wgs84["north"],
+                    src_shape[1], src_shape[0],
+                )
+                native_bounds = (
+                    wgs84["west"], wgs84["south"],
+                    wgs84["east"], wgs84["north"],
+                )
+            else:
+                # Projected source — build native transform from projection info
+                from .reprojector import build_native_params_from_projection_info
+
+                projection_info_dict = {
+                    "proj_def": proj_def,
+                    "where_attrs": where_attrs,
+                }
+                native_crs, native_transform, native_bounds = (
+                    build_native_params_from_projection_info(src_shape, projection_info_dict)
+                )
+
+                if native_crs is None:
+                    logger.error(f"Could not build native params for {source_name}")
+                    return None
 
             # Compute transform grid
             grid = self.get_or_compute(

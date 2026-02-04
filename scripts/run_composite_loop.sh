@@ -31,11 +31,7 @@ while true; do
 
     # Run composite with backload
     imeteo-radar composite \
-        --sources dwd,shmu,chmi,omsz,imgw \
         --output ./outputs/composite \
-        --backload \
-        --hours 1 \
-        --update-extent \
         2>&1
 
     echo ""

@@ -110,6 +110,7 @@ imeteo-radar coverage-mask --output /tmp/coverage/
 | Document | Description |
 |----------|-------------|
 | [CLI Reference](docs/cli-reference.md) | Complete command documentation |
+| [Data Flow](docs/data-flow.md) | Sequence diagrams and cache flows |
 | [Deployment](docs/deployment.md) | Docker, Kubernetes, cloud storage |
 | [Architecture](docs/architecture.md) | Technical deep-dive |
 | [Development](docs/development.md) | Setup and contributing |

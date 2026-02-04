@@ -81,6 +81,7 @@ imeteo-radar --help
 | Topic | File |
 |-------|------|
 | CLI commands & options | [docs/cli-reference.md](docs/cli-reference.md) |
+| Data flow & sequences | [docs/data-flow.md](docs/data-flow.md) |
 | Docker, K8s, cloud | [docs/deployment.md](docs/deployment.md) |
 | Architecture & pipeline | [docs/architecture.md](docs/architecture.md) |
 | Development setup | [docs/development.md](docs/development.md) |

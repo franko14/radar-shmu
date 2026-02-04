@@ -57,15 +57,15 @@ run_radar_generation() {
     # Generate individual radar images in parallel
     echo -e "${BLUE}📡 Generating individual radar images...${NC}"
 
-    docker run --rm -v "$OUTPUTS_DIR/germany:/tmp/germany" "$DOCKER_IMAGE" \
+    docker run --rm -v "$OUTPUTS_DIR/germany:/tmp/iradar/germany" "$DOCKER_IMAGE" \
         imeteo-radar fetch --source dwd &
     PID_DWD=$!
 
-    docker run --rm -v "$OUTPUTS_DIR/slovakia:/tmp/slovakia" "$DOCKER_IMAGE" \
+    docker run --rm -v "$OUTPUTS_DIR/slovakia:/tmp/iradar/slovakia" "$DOCKER_IMAGE" \
         imeteo-radar fetch --source shmu &
     PID_SHMU=$!
 
-    docker run --rm -v "$OUTPUTS_DIR/czechia:/tmp/czechia" "$DOCKER_IMAGE" \
+    docker run --rm -v "$OUTPUTS_DIR/czechia:/tmp/iradar/czechia" "$DOCKER_IMAGE" \
         imeteo-radar fetch --source chmi &
     PID_CHMI=$!
 
@@ -81,8 +81,8 @@ run_radar_generation() {
 
     # Generate composite
     echo -e "${BLUE}🎨 Generating composite...${NC}"
-    docker run --rm -v "$OUTPUTS_DIR/composite:/tmp/composite" "$DOCKER_IMAGE" \
-        imeteo-radar composite --sources dwd,shmu,chmi --output /tmp/composite
+    docker run --rm -v "$OUTPUTS_DIR/composite:/tmp/iradar/composite" "$DOCKER_IMAGE" \
+        imeteo-radar composite --sources dwd,shmu,chmi --output /tmp/iradar/composite
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ Composite complete${NC}"

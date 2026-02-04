@@ -22,8 +22,6 @@ import numpy as np
 from PIL import Image
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
-from scipy.ndimage import zoom
-
 from ..config.sources import (
     get_all_source_names,
     get_source_config,
@@ -93,29 +91,39 @@ def _get_wgs84_from_extent_index(extent_data: dict[str, Any]) -> dict[str, float
 
 
 def _load_source_extent(
-    source_name: str, output_base_dir: str
+    source_name: str, output_base_dir: str | None = None
 ) -> dict[str, float] | None:
     """
     Load actual reprojected extent for a source from its extent_index.json.
 
+    Reads from /tmp/iradar-data/extent/{source_name}/ (canonical location).
+    Falls back to legacy location ({output_base_dir}/{folder}/) for compat.
+
     Args:
         source_name: Source identifier (e.g., 'dwd', 'shmu')
-        output_base_dir: Base output directory (parent of source folders)
+        output_base_dir: Legacy base output directory (parent of source folders)
 
     Returns:
         WGS84 bounds dict or None if not found
     """
-    config = get_source_config(source_name)
-    if not config:
-        return None
+    # Try canonical location first: /tmp/iradar-data/extent/{source}/
+    canonical_dir = os.path.join("/tmp/iradar-data/extent", source_name)
+    extent_data = _load_extent_index(canonical_dir)
+    if extent_data is not None:
+        result = _get_wgs84_from_extent_index(extent_data)
+        if result is not None:
+            return result
 
-    source_dir = os.path.join(output_base_dir, config["folder"])
-    extent_data = _load_extent_index(source_dir)
+    # Fallback to legacy location: {output_base_dir}/{folder}/
+    if output_base_dir:
+        config = get_source_config(source_name)
+        if config:
+            source_dir = os.path.join(output_base_dir, config["folder"])
+            extent_data = _load_extent_index(source_dir)
+            if extent_data is not None:
+                return _get_wgs84_from_extent_index(extent_data)
 
-    if extent_data is None:
-        return None
-
-    return _get_wgs84_from_extent_index(extent_data)
+    return None
 
 
 def _save_coverage_mask_png(coverage: np.ndarray, output_path: str) -> str:
@@ -368,23 +376,6 @@ def _get_coverage_and_projection(
         return None
 
 
-def get_coverage_from_source(source_name: str) -> np.ndarray | None:
-    """
-    Download latest radar file and extract coverage mask.
-
-    Args:
-        source_name: Source identifier (e.g., 'dwd', 'shmu')
-
-    Returns:
-        Boolean array where True = covered, False = not covered
-    """
-    result = _get_coverage_and_projection(source_name)
-    if result is None:
-        return None
-    coverage, _, _ = result
-    return coverage
-
-
 def _reproject_coverage_to_target(
     coverage: np.ndarray,
     projection_info: dict[str, Any] | None,
@@ -489,7 +480,10 @@ def _get_target_dimensions_from_pngs(output_dir: str) -> tuple[int, int] | None:
 
 
 def generate_source_coverage_mask(
-    source_name: str, output_dir: str, filename: str = "coverage_mask.png"
+    source_name: str,
+    output_dir: str | None = None,
+    filename: str = "coverage_mask.png",
+    png_dir: str | None = None,
 ) -> str | None:
     """
     Generate a coverage mask PNG for a single radar source.
@@ -499,26 +493,44 @@ def generate_source_coverage_mask(
     This guarantees pixel-perfect alignment because the mask occupies the
     exact same pixel grid as the data PNGs.
 
+    Mask is saved to /tmp/iradar-data/mask/{source}/ (canonical location).
+
     Args:
         source_name: Source identifier (e.g., 'dwd', 'shmu')
-        output_dir: Directory to save the mask
+        output_dir: Directory to save the mask (default: /tmp/iradar-data/mask/{source})
         filename: Output filename (default: coverage_mask.png)
+        png_dir: Directory containing data PNGs for dimension detection
+            (default: /tmp/iradar/{folder}/)
 
     Returns:
         Path to generated mask file, or None if failed
     """
     source_name = source_name.lower()
 
+    # Resolve default output_dir for mask
+    if output_dir is None:
+        output_dir = os.path.join("/tmp/iradar-data/mask", source_name)
+
+    # Resolve png_dir for target dimension detection
+    if png_dir is None:
+        config = get_source_config(source_name)
+        folder = config["folder"] if config else source_name
+        png_dir = os.path.join("/tmp/iradar", folder)
+
     logger.info(
         f"Generating coverage mask for {source_name}...",
         extra={"source": source_name, "operation": "generate"},
     )
 
-    # Load target extent from extent_index.json
-    extent_data = _load_extent_index(output_dir)
+    # Load target extent from extent_index.json (canonical location)
+    extent_dir = os.path.join("/tmp/iradar-data/extent", source_name)
+    extent_data = _load_extent_index(extent_dir)
+    # Fallback to legacy location (colocated with PNGs)
+    if extent_data is None:
+        extent_data = _load_extent_index(png_dir)
     if extent_data is None:
         logger.error(
-            f"No extent_index.json in {output_dir}. "
+            f"No extent_index.json for {source_name}. "
             "Run 'imeteo-radar fetch' first to generate extent data.",
             extra={"source": source_name},
         )
@@ -533,10 +545,10 @@ def generate_source_coverage_mask(
         return None
 
     # Get target dimensions from existing radar PNGs
-    target_shape = _get_target_dimensions_from_pngs(output_dir)
+    target_shape = _get_target_dimensions_from_pngs(png_dir)
     if target_shape is None:
         logger.error(
-            f"No existing data PNGs in {output_dir} to determine target dimensions",
+            f"No existing data PNGs in {png_dir} to determine target dimensions",
             extra={"source": source_name},
         )
         return None
@@ -597,8 +609,9 @@ def _reproject_coverage_to_composite(
     """
     Map a source coverage mask (already in Web Mercator) to the composite grid.
 
-    Both source and composite extents should be actual reprojected WGS84
-    bounds from extent_index.json for accurate alignment.
+    Uses rasterio.warp.reproject for accurate coordinate mapping between
+    the source and composite Mercator grids. This correctly handles sources
+    that extend beyond composite bounds (clips rather than compresses).
 
     Args:
         coverage: Source coverage boolean array (in Web Mercator projection)
@@ -612,58 +625,50 @@ def _reproject_coverage_to_composite(
     comp_height, comp_width = composite_shape
     src_height, src_width = coverage.shape
 
-    # Convert extents to mercator
+    # Build source transform in Web Mercator
     src_west_m, src_south_m = lonlat_to_mercator(
         source_extent["west"], source_extent["south"]
     )
     src_east_m, src_north_m = lonlat_to_mercator(
         source_extent["east"], source_extent["north"]
     )
+    src_transform = from_bounds(
+        src_west_m, src_south_m, src_east_m, src_north_m, src_width, src_height
+    )
 
-    comp_west_m, comp_south_m = lonlat_to_mercator(
+    # Build destination transform in Web Mercator
+    dst_west_m, dst_south_m = lonlat_to_mercator(
         composite_extent["west"], composite_extent["south"]
     )
-    comp_east_m, comp_north_m = lonlat_to_mercator(
+    dst_east_m, dst_north_m = lonlat_to_mercator(
         composite_extent["east"], composite_extent["north"]
     )
+    dst_transform = from_bounds(
+        dst_west_m, dst_south_m, dst_east_m, dst_north_m, comp_width, comp_height
+    )
 
-    # Calculate pixel coordinates in composite grid
-    comp_width_m = comp_east_m - comp_west_m
-    comp_height_m = comp_north_m - comp_south_m
+    crs = get_crs_web_mercator()
 
-    # Source position in composite (pixel coordinates)
-    x_start = int((src_west_m - comp_west_m) / comp_width_m * comp_width)
-    x_end = int((src_east_m - comp_west_m) / comp_width_m * comp_width)
-    y_start = int((comp_north_m - src_north_m) / comp_height_m * comp_height)
-    y_end = int((comp_north_m - src_south_m) / comp_height_m * comp_height)
+    # Reproject using rasterio (handles clipping and coordinate mapping)
+    coverage_float = coverage.astype(np.float32)
+    reprojected = np.zeros((comp_height, comp_width), dtype=np.float32)
 
-    # Clamp to valid range
-    x_start = max(0, x_start)
-    x_end = min(comp_width, x_end)
-    y_start = max(0, y_start)
-    y_end = min(comp_height, y_end)
+    reproject(
+        source=coverage_float,
+        destination=reprojected,
+        src_transform=src_transform,
+        src_crs=crs,
+        dst_transform=dst_transform,
+        dst_crs=crs,
+        resampling=Resampling.nearest,
+    )
 
-    target_width = x_end - x_start
-    target_height = y_end - y_start
-
-    if target_width <= 0 or target_height <= 0:
-        return np.zeros(composite_shape, dtype=bool)
-
-    # Resize coverage to target size
-    zoom_y = target_height / src_height
-    zoom_x = target_width / src_width
-    resized = zoom(coverage.astype(float), (zoom_y, zoom_x), order=0) > 0.5
-
-    # Place in composite grid
-    result = np.zeros(composite_shape, dtype=bool)
-    result[y_start:y_end, x_start:x_end] = resized[: y_end - y_start, : x_end - x_start]
-
-    return result
+    return reprojected > 0.5
 
 
 def generate_composite_coverage_mask(
     sources: list[str] | None = None,
-    output_dir: str = "/tmp/composite",
+    output_dir: str = "/tmp/iradar-data/mask/composite",
     output_base_dir: str | None = None,
     filename: str = "coverage_mask.png",
     resolution_m: float = 500.0,
@@ -672,15 +677,17 @@ def generate_composite_coverage_mask(
     Generate a composite coverage mask PNG from multiple sources.
 
     Reprojects each source's coverage to the composite grid and combines
-    them using OR logic. Uses extent_index.json files for accurate alignment:
-    - Composite extent from {output_dir}/extent_index.json
-    - Per-source extents from {output_base_dir}/{folder}/extent_index.json
+    them using OR logic. Uses extent_index.json from iradar-data/extent/
+    for accurate alignment. The composite mask uses the composite
+    extent_index.json bounds directly.
+
+    Mask is saved to /tmp/iradar-data/mask/composite/ (canonical location).
 
     Args:
         sources: List of source names to include (default: all sources)
         output_dir: Directory to save the composite mask
         output_base_dir: Base directory containing source output folders.
-            If None, derived from output_dir parent.
+            If None, defaults to /tmp/iradar.
         filename: Output filename (default: coverage_mask.png)
         resolution_m: Resolution in meters (default: 500m, overridden by extent_index)
 
@@ -690,9 +697,9 @@ def generate_composite_coverage_mask(
     if sources is None:
         sources = get_all_source_names()
 
-    # Derive output_base_dir from output_dir if not specified
+    # Derive output_base_dir (for PNG directories) if not specified
     if output_base_dir is None:
-        output_base_dir = os.path.dirname(output_dir)
+        output_base_dir = "/tmp/iradar"
 
     logger.info(
         "Generating composite coverage mask...",
@@ -700,37 +707,33 @@ def generate_composite_coverage_mask(
     )
     logger.debug(f"Sources: {', '.join(s for s in sources)}")
 
-    # Load resolution from composite extent_index.json
-    extent_info = _load_extent_index(output_dir)
-    if extent_info:
-        metadata = extent_info.get("metadata", {})
-        resolution_m = metadata.get("resolution_m", resolution_m)
+    # Load composite extent_index.json — mask uses same bounds as composite data
+    extent_info = _load_extent_index("/tmp/iradar-data/extent/composite")
+    if extent_info is None:
+        extent_info = _load_extent_index(os.path.join(output_base_dir, "composite"))
+    if extent_info is None:
+        logger.error(
+            "No composite extent_index.json found. Run 'imeteo-radar composite' first."
+        )
+        return None
 
-    # Build mask extent as the UNION of all individual source extents.
-    # This may be larger than the composite data extent (e.g., IMGW extends
-    # further north than the composite grid). The mask covers the full area
-    # of all sources without stretching existing composite data.
+    metadata = extent_info.get("metadata", {})
+    resolution_m = metadata.get("resolution_m", resolution_m)
+
+    mask_extent = _get_wgs84_from_extent_index(extent_info)
+    if mask_extent is None:
+        logger.error("No WGS84 bounds in composite extent_index.json")
+        return None
+
+    # Load per-source extents for individual mask placement
     source_extents = {}
     for s in sources:
         ext = _load_source_extent(s, output_base_dir)
         if ext:
             source_extents[s] = ext
 
-    if not source_extents:
-        logger.error(
-            "No extent_index.json files found. Run 'imeteo-radar fetch' first "
-            "to generate extent data for each source."
-        )
-        return None
-
-    mask_extent = {
-        "west": min(ext["west"] for ext in source_extents.values()),
-        "east": max(ext["east"] for ext in source_extents.values()),
-        "south": min(ext["south"] for ext in source_extents.values()),
-        "north": max(ext["north"] for ext in source_extents.values()),
-    }
     logger.debug(
-        f"Mask extent (union of {len(source_extents)} sources): "
+        f"Mask extent (from composite): "
         f"({mask_extent['west']:.4f}, {mask_extent['south']:.4f}) to "
         f"({mask_extent['east']:.4f}, {mask_extent['north']:.4f})"
     )
@@ -763,12 +766,17 @@ def generate_composite_coverage_mask(
         if not config:
             continue
 
-        source_dir = os.path.join(output_base_dir, config["folder"])
-        mask_path = os.path.join(source_dir, "coverage_mask.png")
+        # Look for mask in canonical location first, then legacy
+        mask_dir = os.path.join("/tmp/iradar-data/mask", source_name)
+        mask_path = os.path.join(mask_dir, "coverage_mask.png")
+        if not os.path.exists(mask_path):
+            # Legacy fallback: colocated with PNGs
+            source_dir = os.path.join(output_base_dir, config["folder"])
+            mask_path = os.path.join(source_dir, "coverage_mask.png")
 
         if not os.path.exists(mask_path):
             logger.debug(
-                f"Skipping {source_name} (no coverage_mask.png in {source_dir})",
+                f"Skipping {source_name} (no coverage_mask.png)",
                 extra={"source": source_name},
             )
             continue
@@ -825,27 +833,20 @@ def generate_composite_coverage_mask(
         extra={"operation": "save"},
     )
 
-    # Save mask extent (may differ from composite data extent)
-    mask_extent_path = os.path.join(output_dir, "coverage_mask_extent.json")
-    with open(mask_extent_path, "w") as f:
-        json.dump({"wgs84": mask_extent}, f, indent=2)
-    logger.debug(f"Saved mask extent: {mask_extent_path}")
-
     return output_path
 
 
 def generate_all_coverage_masks(
-    output_base_dir: str = "/tmp", resolution_m: float = 500.0
+    output_base_dir: str = "/tmp/iradar", resolution_m: float = 500.0
 ) -> dict[str, str]:
     """
     Generate coverage masks for all sources and composite.
 
-    Masks are saved alongside radar data and extent_index.json files.
+    Individual masks go to /tmp/iradar-data/mask/{source}/
+    Composite mask goes to /tmp/iradar-data/mask/composite/
 
     Args:
-        output_base_dir: Base directory (default: /tmp)
-            Individual masks go to {base}/{country}/ (e.g., /tmp/germany/)
-            Composite mask goes to {base}/composite/
+        output_base_dir: Base directory for PNGs (default: /tmp/iradar)
         resolution_m: Resolution for composite mask
 
     Returns:
@@ -863,16 +864,18 @@ def generate_all_coverage_masks(
         config = get_source_config(source_name)
         if config:
             folder = config["folder"]
-            output_dir = os.path.join(output_base_dir, folder)
-            path = generate_source_coverage_mask(source_name, output_dir)
+            mask_dir = os.path.join("/tmp/iradar-data/mask", source_name)
+            png_dir = os.path.join(output_base_dir, folder)
+            path = generate_source_coverage_mask(
+                source_name, output_dir=mask_dir, png_dir=png_dir
+            )
             if path:
                 results[source_name] = path
 
     # Generate composite mask
-    composite_dir = os.path.join(output_base_dir, "composite")
     path = generate_composite_coverage_mask(
         sources=None,
-        output_dir=composite_dir,
+        output_dir="/tmp/iradar-data/mask/composite",
         output_base_dir=output_base_dir,
         resolution_m=resolution_m,
     )

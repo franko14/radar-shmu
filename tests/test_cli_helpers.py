@@ -115,7 +115,7 @@ class TestInitCacheFromArgs:
             init_cache_from_args(args, upload_enabled=True)
 
             mock_cache_class.assert_called_once_with(
-                local_dir=Path("/tmp/iradar-data"),
+                local_dir=Path("/tmp/iradar-data/data"),
                 ttl_minutes=60,
                 s3_enabled=True,
             )

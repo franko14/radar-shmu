@@ -37,7 +37,7 @@ docker run --rm -v /data/radar:/tmp lfranko/imeteo-radar:latest \
   imeteo-radar fetch --source dwd
 
 # Source-specific directories
-docker run --rm -v /data/germany:/tmp/germany lfranko/imeteo-radar:latest \
+docker run --rm -v /data/germany:/tmp/iradar/germany lfranko/imeteo-radar:latest \
   imeteo-radar fetch --source dwd
 ```
 
@@ -86,7 +86,7 @@ services:
     container_name: dwd-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source dwd; sleep 300; done"
     volumes:
-      - ./outputs/germany:/tmp/germany
+      - ./outputs/germany:/tmp/iradar/germany
     environment:
       - TZ=Europe/Berlin
     restart: unless-stopped
@@ -97,7 +97,7 @@ services:
     container_name: shmu-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source shmu; sleep 300; done"
     volumes:
-      - ./outputs/slovakia:/tmp/slovakia
+      - ./outputs/slovakia:/tmp/iradar/slovakia
     environment:
       - TZ=Europe/Bratislava
     restart: unless-stopped
@@ -108,7 +108,7 @@ services:
     container_name: chmi-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source chmi; sleep 300; done"
     volumes:
-      - ./outputs/czechia:/tmp/czechia
+      - ./outputs/czechia:/tmp/iradar/czechia
     environment:
       - TZ=Europe/Prague
     restart: unless-stopped
@@ -119,7 +119,7 @@ services:
     container_name: omsz-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source omsz; sleep 300; done"
     volumes:
-      - ./outputs/hungary:/tmp/hungary
+      - ./outputs/hungary:/tmp/iradar/hungary
     environment:
       - TZ=Europe/Budapest
     restart: unless-stopped
@@ -130,7 +130,7 @@ services:
     container_name: arso-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source arso; sleep 300; done"
     volumes:
-      - ./outputs/slovenia:/tmp/slovenia
+      - ./outputs/slovenia:/tmp/iradar/slovenia
     environment:
       - TZ=Europe/Ljubljana
     restart: unless-stopped
@@ -141,7 +141,7 @@ services:
     container_name: imgw-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source imgw; sleep 300; done"
     volumes:
-      - ./outputs/poland:/tmp/poland
+      - ./outputs/poland:/tmp/iradar/poland
     environment:
       - TZ=Europe/Warsaw
     restart: unless-stopped
@@ -152,7 +152,7 @@ services:
     container_name: composite-generator
     command: sh -c "while true; do imeteo-radar composite; sleep 300; done"
     volumes:
-      - ./outputs/composite:/tmp/composite
+      - ./outputs/composite:/tmp/iradar/composite
     environment:
       - TZ=Europe/Berlin
     restart: unless-stopped
@@ -213,7 +213,7 @@ spec:
                 name: radar-credentials
             volumeMounts:
             - name: radar-output
-              mountPath: /tmp/germany
+              mountPath: /tmp/iradar/germany
             resources:
               requests:
                 memory: "256Mi"
@@ -412,7 +412,7 @@ See [architecture.md](architecture.md) for optimization details.
 ```bash
 docker ps
 docker logs -f dwd-fetcher
-docker exec dwd-fetcher ls /tmp/germany/
+docker exec dwd-fetcher ls /tmp/iradar/germany/
 ```
 
 ### Kubernetes
@@ -427,8 +427,8 @@ kubectl logs job/radar-dwd-fetcher-xxxxx
 
 ```bash
 # Check recent files
-ls -la /tmp/germany/ | tail -10
+ls -la /tmp/iradar/germany/ | tail -10
 
 # Verify extent file
-cat /tmp/germany/extent_index.json | jq .
+cat /tmp/iradar-data/extent/dwd/extent_index.json | jq .
 ```

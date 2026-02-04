@@ -55,7 +55,7 @@ imeteo-radar fetch [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw` | `dwd` | Radar data source |
-| `--output` | path | `/tmp/{country}/` | Output directory |
+| `--output` | path | `/tmp/iradar/{country}/` | Output directory |
 | `--backload` | flag | - | Enable historical data download |
 | `--hours` | int | - | Hours to backload (requires `--backload`) |
 | `--from` | string | - | Start time: `"YYYY-MM-DD HH:MM"` |
@@ -63,7 +63,7 @@ imeteo-radar fetch [OPTIONS]
 | `--update-extent` | flag | - | Force regenerate extent_index.json |
 | `--disable-upload` | flag | - | Skip cloud storage upload |
 | `--reprocess-count` | int | `6` | Number of recent timestamps to fetch (~30 min) |
-| `--cache-dir` | path | `/tmp/iradar-data` | Directory for processed data cache |
+| `--cache-dir` | path | `/tmp/iradar-data/data` | Directory for processed data cache |
 | `--cache-ttl` | int | `60` | Cache TTL in minutes |
 | `--no-cache` | flag | - | Disable caching entirely |
 | `--no-cache-upload` | flag | - | Disable S3 cache sync (local cache only) |
@@ -73,12 +73,12 @@ imeteo-radar fetch [OPTIONS]
 
 | Source | Directory | Country |
 |--------|-----------|---------|
-| `dwd` | `/tmp/germany/` | Germany |
-| `shmu` | `/tmp/slovakia/` | Slovakia |
-| `chmi` | `/tmp/czechia/` | Czech Republic |
-| `omsz` | `/tmp/hungary/` | Hungary |
-| `arso` | `/tmp/slovenia/` | Slovenia |
-| `imgw` | `/tmp/poland/` | Poland |
+| `dwd` | `/tmp/iradar/germany/` | Germany |
+| `shmu` | `/tmp/iradar/slovakia/` | Slovakia |
+| `chmi` | `/tmp/iradar/czechia/` | Czech Republic |
+| `omsz` | `/tmp/iradar/hungary/` | Hungary |
+| `arso` | `/tmp/iradar/slovenia/` | Slovenia |
+| `imgw` | `/tmp/iradar/poland/` | Poland |
 
 ### Examples
 
@@ -130,7 +130,7 @@ imeteo-radar composite [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--sources` | string | `dwd,shmu,chmi,omsz,arso,imgw` | Comma-separated source list |
-| `--output` | path | `/tmp/composite/` | Output directory |
+| `--output` | path | `/tmp/iradar/composite/` | Output directory |
 | `--resolution` | float | `500` | Target resolution in meters |
 | `--backload` | flag | - | Enable historical composite generation |
 | `--hours` | int | - | Hours to backload |
@@ -144,7 +144,7 @@ imeteo-radar composite [OPTIONS]
 | `--min-core-sources` | int | `3` | Minimum core sources required for composite |
 | `--max-data-age` | int | `30` | Maximum age of data in minutes (outage threshold) |
 | `--reprocess-count` | int | `6` | Number of recent timestamps to reprocess |
-| `--cache-dir` | path | `/tmp/iradar-data` | Directory for processed data cache |
+| `--cache-dir` | path | `/tmp/iradar-data/data` | Directory for processed data cache |
 | `--cache-ttl` | int | `60` | Cache TTL in minutes |
 | `--no-cache` | flag | - | Disable caching entirely |
 | `--no-cache-upload` | flag | - | Disable S3 cache sync (local cache only) |
@@ -236,7 +236,7 @@ imeteo-radar extent [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw\|all` | `all` | Source(s) to generate extent for |
-| `--output` | path | `/tmp/{country}/` | Output directory |
+| `--output` | path | `/tmp/iradar/{country}/` | Output directory |
 
 ### Examples
 
@@ -259,25 +259,14 @@ The `extent_index.json` file contains:
 {
   "metadata": {
     "title": "Radar Coverage Extent",
-    "description": "Geographic extent and projection information",
-    "version": "1.0",
-    "generated": "2024-09-25T14:30:00Z",
-    "coordinate_system": "WGS84 (EPSG:4326)"
+    "source": "dwd",
+    "generated": "2024-09-25T14:30:00Z"
   },
-  "source": {
-    "name": "DWD",
-    "country": "Germany",
-    "extent": {
-      "wgs84": {
-        "west": 1.5,
-        "east": 18.7,
-        "south": 45.7,
-        "north": 56.2
-      }
-    },
-    "projection": "Stereographic",
-    "grid_size": [4800, 4400],
-    "resolution_m": [1000, 1000]
+  "wgs84": {
+    "west": 1.5,
+    "east": 18.7,
+    "south": 45.7,
+    "north": 56.2
   }
 }
 ```
@@ -333,7 +322,7 @@ imeteo-radar transform-cache --precompute --source dwd
 | Tier | Location | Persistence | Speed |
 |------|----------|-------------|-------|
 | Memory | In-process | Session only | Instant |
-| Local disk | `/tmp/radar-transforms/` | Container lifetime | Fast |
+| Local disk | `/tmp/iradar-data/grid/` | Container lifetime | Fast |
 | S3/DO Spaces | Cloud storage | Permanent | Network |
 
 ---
@@ -354,7 +343,7 @@ imeteo-radar coverage-mask [OPTIONS]
 |--------|------|---------|-------------|
 | `--source` | `dwd\|shmu\|chmi\|arso\|omsz\|imgw\|all` | `all` | Source to generate mask for |
 | `--composite` | flag | - | Generate composite coverage mask |
-| `--output` | path | `/tmp` | Base output directory |
+| `--output` | path | `/tmp/iradar` | Base output directory |
 | `--resolution` | float | `500` | Resolution for composite mask in meters |
 
 ### Examples

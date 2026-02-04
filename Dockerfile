@@ -57,10 +57,11 @@ COPY --from=builder /app/pyproject.toml ./pyproject.toml
 COPY scripts/ ./scripts/
 
 # Create output directories with proper permissions
-RUN mkdir -p /tmp/germany /tmp/slovakia /tmp/czechia /tmp/hungary /tmp/slovenia /tmp/poland /tmp/composite \
-    /tmp/iradar-data /tmp/radar-transforms /app/outputs /home/radar/.config/matplotlib \
-    && chown -R radar:radar /tmp/germany /tmp/slovakia /tmp/czechia /tmp/hungary /tmp/slovenia /tmp/poland \
-    /tmp/composite /tmp/iradar-data /tmp/radar-transforms /app/outputs /home/radar
+RUN mkdir -p /tmp/iradar/germany /tmp/iradar/slovakia /tmp/iradar/czechia /tmp/iradar/hungary \
+    /tmp/iradar/slovenia /tmp/iradar/poland /tmp/iradar/composite \
+    /tmp/iradar-data/data /tmp/iradar-data/grid /tmp/iradar-data/extent /tmp/iradar-data/mask \
+    /app/outputs /home/radar/.config/matplotlib \
+    && chown -R radar:radar /tmp/iradar /tmp/iradar-data /app/outputs /home/radar
 
 # Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"
@@ -72,7 +73,7 @@ ENV MPLCONFIGDIR="/home/radar/.config/matplotlib"
 USER radar
 
 # Set up volume for outputs
-VOLUME ["/app/outputs", "/tmp/germany", "/tmp/slovakia", "/tmp/czechia", "/tmp/hungary", "/tmp/slovenia", "/tmp/poland", "/tmp/composite"]
+VOLUME ["/app/outputs", "/tmp/iradar", "/tmp/iradar-data"]
 
 # Default command - show help
 CMD ["imeteo-radar", "--help"]
