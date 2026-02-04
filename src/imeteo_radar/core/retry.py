@@ -9,15 +9,15 @@ backoff strategies and callback hooks.
 import random
 import time
 from functools import wraps
-from typing import Callable, Optional, Tuple, Type
+from collections.abc import Callable
 
 
 def retry_with_backoff(
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
-    exceptions: Tuple[Type[Exception], ...] = (Exception,),
-    on_retry: Optional[Callable[[int, float, Exception], None]] = None,
+    exceptions: tuple[type[Exception], ...] = (Exception,),
+    on_retry: Callable[[int, float, Exception], None] | None = None,
     jitter: bool = False,
 ):
     """Decorator for retry with exponential backoff.
@@ -112,14 +112,14 @@ class RetryableOperation:
         max_retries: int = 3,
         base_delay: float = 1.0,
         max_delay: float = 30.0,
-        exceptions: Tuple[Type[Exception], ...] = (Exception,),
+        exceptions: tuple[type[Exception], ...] = (Exception,),
     ):
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.max_delay = max_delay
         self.exceptions = exceptions
         self.attempt = 0
-        self.last_exception: Optional[Exception] = None
+        self.last_exception: Exception | None = None
         self._succeeded = False
 
     def __enter__(self):
