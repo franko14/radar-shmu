@@ -88,13 +88,18 @@ class PNGExporter:
                 if all(k in wgs84 for k in ("west", "east", "south", "north")):
                     native_crs = get_crs_wgs84()
                     native_transform = from_bounds(
-                        wgs84["west"], wgs84["south"],
-                        wgs84["east"], wgs84["north"],
-                        data.shape[1], data.shape[0],
+                        wgs84["west"],
+                        wgs84["south"],
+                        wgs84["east"],
+                        wgs84["north"],
+                        data.shape[1],
+                        data.shape[0],
                     )
                     native_bounds = (
-                        wgs84["west"], wgs84["south"],
-                        wgs84["east"], wgs84["north"],
+                        wgs84["west"],
+                        wgs84["south"],
+                        wgs84["east"],
+                        wgs84["north"],
                     )
                 else:
                     return data, {}, False
@@ -222,7 +227,9 @@ class PNGExporter:
                     and projection_info
                 ):
                     data, wgs84_bounds, used_cache = self._reproject_with_cache(
-                        data, projection_info, source_name,
+                        data,
+                        projection_info,
+                        source_name,
                         extent=radar_data.get("extent", extent),
                     )
                     if used_cache:
@@ -242,27 +249,40 @@ class PNGExporter:
 
                     # Build native CRS params from projection info
                     native_crs, native_transform, native_bounds = (
-                        build_native_params_from_projection_info(data.shape, projection_info)
+                        build_native_params_from_projection_info(
+                            data.shape, projection_info
+                        )
                     )
 
                     # WGS84 sources (OMSZ, ARSO) — build params from extent
                     if native_crs is None:
                         wgs84 = {}
                         if data_extent:
-                            wgs84 = data_extent.get("wgs84", data_extent) if isinstance(data_extent, dict) else {}
-                        if not all(k in wgs84 for k in ("west", "east", "south", "north")):
+                            wgs84 = (
+                                data_extent.get("wgs84", data_extent)
+                                if isinstance(data_extent, dict)
+                                else {}
+                            )
+                        if not all(
+                            k in wgs84 for k in ("west", "east", "south", "north")
+                        ):
                             raise ValueError(
                                 f"Cannot reproject: no projection info and no WGS84 extent bounds"
                             )
                         native_crs = get_crs_wgs84()
                         native_transform = rt_from_bounds(
-                            wgs84["west"], wgs84["south"],
-                            wgs84["east"], wgs84["north"],
-                            data.shape[1], data.shape[0],
+                            wgs84["west"],
+                            wgs84["south"],
+                            wgs84["east"],
+                            wgs84["north"],
+                            data.shape[1],
+                            data.shape[0],
                         )
                         native_bounds = (
-                            wgs84["west"], wgs84["south"],
-                            wgs84["east"], wgs84["north"],
+                            wgs84["west"],
+                            wgs84["south"],
+                            wgs84["east"],
+                            wgs84["north"],
                         )
 
                     # Single reprojection path for all sources
@@ -413,4 +433,3 @@ class PNGExporter:
                 f"Unknown data type (units: {units}, quantity: {quantity}), using SHMU colormap",
             )
             return {"name": "reflectivity_shmu", **self.colormaps["reflectivity_shmu"]}
-

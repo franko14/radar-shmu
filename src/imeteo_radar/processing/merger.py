@@ -51,7 +51,9 @@ class RadarMerger:
             logger.warning("Need at least 2 sources to merge")
             return None
 
-        logger.info(f"Merging {len(timestamp_data)} sources using '{strategy}' strategy")
+        logger.info(
+            f"Merging {len(timestamp_data)} sources using '{strategy}' strategy"
+        )
 
         try:
             # Determine target grid and extent
@@ -65,7 +67,9 @@ class RadarMerger:
             # Regrid all sources to target grid
             regridded_data = {}
             for source_name, files in timestamp_data.items():
-                logger.info(f"Regridding {source_name} data...", extra={"source": source_name})
+                logger.info(
+                    f"Regridding {source_name} data...", extra={"source": source_name}
+                )
 
                 # For now, use first file from each source (TODO: handle multiple products)
                 file_data = files[0] if files else None

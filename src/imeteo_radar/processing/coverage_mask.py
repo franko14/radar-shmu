@@ -57,7 +57,9 @@ def _load_extent_index(output_dir: str) -> dict[str, Any] | None:
     return None
 
 
-def _get_wgs84_from_extent_index(extent_data: dict[str, Any]) -> dict[str, float] | None:
+def _get_wgs84_from_extent_index(
+    extent_data: dict[str, Any],
+) -> dict[str, float] | None:
     """
     Extract WGS84 bounds from extent_index.json data.
 
@@ -170,7 +172,7 @@ def _read_raw_hdf5_data(file_path: str) -> tuple[np.ndarray, int]:
 
         if data is None:
             # Try to find any data array
-            def find_data(name, obj):
+            def find_data(_name, obj):
                 nonlocal data
                 if isinstance(obj, h5py.Dataset) and len(obj.shape) == 2:
                     if obj.shape[0] > 100 and obj.shape[1] > 100:
@@ -411,12 +413,8 @@ def _reproject_coverage_to_target(
     coverage_float = coverage.astype(np.float32)
 
     # Build destination transform from extent_index.json bounds in Web Mercator
-    west_m, south_m = lonlat_to_mercator(
-        target_wgs84["west"], target_wgs84["south"]
-    )
-    east_m, north_m = lonlat_to_mercator(
-        target_wgs84["east"], target_wgs84["north"]
-    )
+    west_m, south_m = lonlat_to_mercator(target_wgs84["west"], target_wgs84["south"])
+    east_m, north_m = lonlat_to_mercator(target_wgs84["east"], target_wgs84["north"])
     dst_transform = from_bounds(west_m, south_m, east_m, north_m, dst_width, dst_height)
     dst_crs = get_crs_web_mercator()
 
@@ -739,12 +737,8 @@ def generate_composite_coverage_mask(
     )
 
     # Calculate grid dimensions from mask extent at composite resolution
-    west_m, south_m = lonlat_to_mercator(
-        mask_extent["west"], mask_extent["south"]
-    )
-    east_m, north_m = lonlat_to_mercator(
-        mask_extent["east"], mask_extent["north"]
-    )
+    west_m, south_m = lonlat_to_mercator(mask_extent["west"], mask_extent["south"])
+    east_m, north_m = lonlat_to_mercator(mask_extent["east"], mask_extent["north"])
 
     width_m = east_m - west_m
     height_m = north_m - south_m
@@ -801,7 +795,9 @@ def generate_composite_coverage_mask(
 
         # Map source coverage into mask grid using extent_index.json bounds
         mapped = _reproject_coverage_to_composite(
-            source_coverage, source_extent, mask_extent,
+            source_coverage,
+            source_extent,
+            mask_extent,
             (grid_height, grid_width),
         )
 
@@ -812,8 +808,7 @@ def generate_composite_coverage_mask(
         new_pixels = pixels_after - pixels_before
 
         logger.debug(
-            f"Added {new_pixels:,} pixels from {source_name} "
-            f"(total: {pixels_after:,})",
+            f"Added {new_pixels:,} pixels from {source_name} (total: {pixels_after:,})",
             extra={"source": source_name, "count": int(new_pixels)},
         )
 

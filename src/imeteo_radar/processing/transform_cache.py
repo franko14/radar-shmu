@@ -35,7 +35,6 @@ from ..core.projections import (
     CACHE_VERSION,
     PROJ4_WEB_MERCATOR,
     PROJ4_WGS84,
-    get_crs_web_mercator,
     validate_grid_dimensions,
     validate_source_name,
 )
@@ -379,8 +378,12 @@ class TransformCache:
         # col = (x - c) / a
         # row = (y - f) / e
         inv_transform = ~native_transform
-        src_col = inv_transform.a * native_x + inv_transform.b * native_y + inv_transform.c
-        src_row = inv_transform.d * native_x + inv_transform.e * native_y + inv_transform.f
+        src_col = (
+            inv_transform.a * native_x + inv_transform.b * native_y + inv_transform.c
+        )
+        src_row = (
+            inv_transform.d * native_x + inv_transform.e * native_y + inv_transform.f
+        )
 
         # Round to nearest pixel and clip to valid range
         src_col_int = np.clip(np.round(src_col).astype(np.int32), 0, src_width - 1)
@@ -388,10 +391,10 @@ class TransformCache:
 
         # Mark out-of-bounds pixels with -1
         out_of_bounds = (
-            (src_col < -0.5) |
-            (src_col >= src_width - 0.5) |
-            (src_row < -0.5) |
-            (src_row >= src_height - 0.5)
+            (src_col < -0.5)
+            | (src_col >= src_width - 0.5)
+            | (src_row < -0.5)
+            | (src_row >= src_height - 0.5)
         )
         src_col_int[out_of_bounds] = -1
         src_row_int[out_of_bounds] = -1
@@ -429,9 +432,15 @@ class TransformCache:
                     return None
 
                 # Convert numpy array to string safely
-                version = str(version_arr.item()) if version_arr.ndim == 0 else str(version_arr)
+                version = (
+                    str(version_arr.item())
+                    if version_arr.ndim == 0
+                    else str(version_arr)
+                )
                 if version != CACHE_VERSION:
-                    logger.debug(f"Cache version mismatch: {version} != {CACHE_VERSION}")
+                    logger.debug(
+                        f"Cache version mismatch: {version} != {CACHE_VERSION}"
+                    )
                     return None
 
                 # Load arrays and convert dict-like arrays back to dicts
@@ -450,7 +459,9 @@ class TransformCache:
                     mercator_bounds = {}
 
                 source_arr = npz["source_name"]
-                source_name = str(source_arr.item()) if source_arr.ndim == 0 else str(source_arr)
+                source_name = (
+                    str(source_arr.item()) if source_arr.ndim == 0 else str(source_arr)
+                )
 
                 return TransformGrid(
                     row_indices=npz["row_indices"],
@@ -544,7 +555,9 @@ class TransformCache:
                 try:
                     tmp_path.unlink(missing_ok=True)
                 except Exception as cleanup_err:
-                    logger.debug(f"Failed to cleanup temp file {tmp_path}: {cleanup_err}")
+                    logger.debug(
+                        f"Failed to cleanup temp file {tmp_path}: {cleanup_err}"
+                    )
 
     def _save_to_s3(self, cache_key: str, grid: TransformGrid):
         """Save transform grid to S3.
@@ -586,7 +599,9 @@ class TransformCache:
 
         except Exception as e:
             # Sanitize error message to avoid leaking credentials
-            logger.warning(f"Failed to upload transform cache to S3: {type(e).__name__}")
+            logger.warning(
+                f"Failed to upload transform cache to S3: {type(e).__name__}"
+            )
         finally:
             # Always cleanup temp file
             if tmp_path is not None:
@@ -661,13 +676,18 @@ class TransformCache:
 
                 native_crs = get_crs_wgs84()
                 native_transform = _from_bounds(
-                    wgs84["west"], wgs84["south"],
-                    wgs84["east"], wgs84["north"],
-                    src_shape[1], src_shape[0],
+                    wgs84["west"],
+                    wgs84["south"],
+                    wgs84["east"],
+                    wgs84["north"],
+                    src_shape[1],
+                    src_shape[0],
                 )
                 native_bounds = (
-                    wgs84["west"], wgs84["south"],
-                    wgs84["east"], wgs84["north"],
+                    wgs84["west"],
+                    wgs84["south"],
+                    wgs84["east"],
+                    wgs84["north"],
                 )
             else:
                 # Projected source — build native transform from projection info
@@ -678,7 +698,9 @@ class TransformCache:
                     "where_attrs": where_attrs,
                 }
                 native_crs, native_transform, native_bounds = (
-                    build_native_params_from_projection_info(src_shape, projection_info_dict)
+                    build_native_params_from_projection_info(
+                        src_shape, projection_info_dict
+                    )
                 )
 
                 if native_crs is None:
@@ -727,11 +749,15 @@ class TransformCache:
         }
 
         # Memory cache stats
-        for key, grid in self._memory_cache.items():
+        for _key, grid in self._memory_cache.items():
             stats["memory_cache_size_mb"] += grid.memory_size_mb()
             source = grid.source_name
             if source not in stats["sources"]:
-                stats["sources"][source] = {"memory": False, "local": False, "s3": False}
+                stats["sources"][source] = {
+                    "memory": False,
+                    "local": False,
+                    "s3": False,
+                }
             stats["sources"][source]["memory"] = True
 
         stats["memory_cache_size_mb"] = round(stats["memory_cache_size_mb"], 2)
@@ -747,7 +773,11 @@ class TransformCache:
                 if parts:
                     source = parts[0]
                     if source not in stats["sources"]:
-                        stats["sources"][source] = {"memory": False, "local": False, "s3": False}
+                        stats["sources"][source] = {
+                            "memory": False,
+                            "local": False,
+                            "s3": False,
+                        }
                     stats["sources"][source]["local"] = True
 
         stats["local_size_mb"] = round(stats["local_size_mb"], 2)

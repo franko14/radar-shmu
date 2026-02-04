@@ -88,8 +88,7 @@ class RadarCompositor:
         # Create target transform for rasterio reprojection
         # from_bounds(west, south, east, north, width, height)
         self.target_transform = from_bounds(
-            west_m, south_m, east_m, north_m,
-            self.grid_width, self.grid_height
+            west_m, south_m, east_m, north_m, self.grid_width, self.grid_height
         )
 
         logger.info(
@@ -120,7 +119,9 @@ class RadarCompositor:
             True if successfully merged, False otherwise
         """
 
-        logger.info(f"Merging {source_name.upper()} data...", extra={"source": source_name})
+        logger.info(
+            f"Merging {source_name.upper()} data...", extra={"source": source_name}
+        )
 
         try:
             source_data = radar_data["data"]
@@ -177,7 +178,9 @@ class RadarCompositor:
             # Count reprojected valid pixels
             reprojected_valid = np.sum(~np.isnan(reprojected))
             if reprojected_valid == 0:
-                logger.warning(f"No data from {source_name} overlaps target extent, skipping")
+                logger.warning(
+                    f"No data from {source_name} overlaps target extent, skipping"
+                )
                 return False
 
             # Merge into composite using NaN-aware max
@@ -188,7 +191,11 @@ class RadarCompositor:
 
             logger.info(
                 f"Merged {source_name.upper()}: +{new_pixels:,} new pixels, total: {after_count:,}",
-                extra={"source": source_name, "new_pixels": new_pixels, "total_pixels": after_count},
+                extra={
+                    "source": source_name,
+                    "new_pixels": new_pixels,
+                    "total_pixels": after_count,
+                },
             )
 
             # Track merged sources
@@ -292,7 +299,9 @@ class RadarCompositor:
         )
 
         # from_bounds expects EDGES (outer boundary of raster)
-        source_transform = from_bounds(edge_west, edge_south, edge_east, edge_north, width, height)
+        source_transform = from_bounds(
+            edge_west, edge_south, edge_east, edge_north, width, height
+        )
 
         return get_crs_wgs84(), source_transform
 

@@ -429,7 +429,9 @@ def generate_extent_info(source, source_name: str, country_dir: str) -> dict:
 
 
 def save_extent_index(
-    source_name: str, extent_info: dict, force: bool = False,
+    source_name: str,
+    extent_info: dict,
+    force: bool = False,
     extent_base_dir: Path | None = None,
     uploader=None,
 ):
@@ -574,7 +576,9 @@ def fetch_command(args) -> int:
         # Generate and save extent information on first run or if requested
         extent_info = generate_extent_info(source, args.source.upper(), country_dir)
         save_extent_index(
-            args.source, extent_info, force=getattr(args, "update_extent", False),
+            args.source,
+            extent_info,
+            force=getattr(args, "update_extent", False),
             uploader=uploader if upload_enabled else None,
         )
 
@@ -716,7 +720,9 @@ def fetch_command(args) -> int:
             timestamps_from_cache = []
 
             if cache:
-                cached_ts_set = set(cache.get_available_timestamps(args.source, product))
+                cached_ts_set = set(
+                    cache.get_available_timestamps(args.source, product)
+                )
                 for ts in available_timestamps[:reprocess_count]:
                     if is_timestamp_in_cache(ts, cached_ts_set):
                         timestamps_from_cache.append(ts)
@@ -1148,10 +1154,14 @@ def transform_cache_command(args) -> int:
             logger.info(f"  Local directory: {stats['local_dir']}")
             logger.info(f"  S3 enabled: {stats['s3_enabled']}")
             logger.info(f"  S3 prefix: {stats['s3_prefix']}")
-            logger.info(f"  Memory cache: {stats['memory_cache_entries']} entries, "
-                       f"{stats['memory_cache_size_mb']} MB")
-            logger.info(f"  Local cache: {stats['local_entries']} entries, "
-                       f"{stats['local_size_mb']} MB")
+            logger.info(
+                f"  Memory cache: {stats['memory_cache_entries']} entries, "
+                f"{stats['memory_cache_size_mb']} MB"
+            )
+            logger.info(
+                f"  Local cache: {stats['local_entries']} entries, "
+                f"{stats['local_size_mb']} MB"
+            )
             logger.info(f"  S3 cache: {stats['s3_entries']} entries")
 
             if stats["sources"]:
@@ -1164,7 +1174,9 @@ def transform_cache_command(args) -> int:
                         tiers.append("local")
                     if info["s3"]:
                         tiers.append("s3")
-                    logger.info(f"    {source.upper()}: {', '.join(tiers) if tiers else 'none'}")
+                    logger.info(
+                        f"    {source.upper()}: {', '.join(tiers) if tiers else 'none'}"
+                    )
             return 0
 
         if args.clear_local:
@@ -1207,16 +1219,22 @@ def transform_cache_command(args) -> int:
                         )
                         success_count += 1
                     else:
-                        logger.info(f"  {source_name.upper()}: Skipped (WGS84 or no data)")
+                        logger.info(
+                            f"  {source_name.upper()}: Skipped (WGS84 or no data)"
+                        )
                         skip_count += 1
                 except Exception as e:
                     logger.warning(f"  {source_name.upper()}: Failed - {e}")
 
-            logger.info(f"Precompute complete: {success_count} computed, {skip_count} skipped")
+            logger.info(
+                f"Precompute complete: {success_count} computed, {skip_count} skipped"
+            )
             return 0
 
         # If no action specified, show help
-        logger.error("No action specified. Use --precompute, --download-s3, --clear-local, --clear-s3, or --stats")
+        logger.error(
+            "No action specified. Use --precompute, --download-s3, --clear-local, --clear-s3, or --stats"
+        )
         return 1
 
     except ImportError as e:

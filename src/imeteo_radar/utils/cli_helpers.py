@@ -14,9 +14,7 @@ from ..core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def init_cache_from_args(
-    args: Any, upload_enabled: bool = True
-) -> Any:
+def init_cache_from_args(args: Any, upload_enabled: bool = True) -> Any:
     """Initialize ProcessedDataCache from CLI arguments.
 
     Used by both fetch and composite commands to ensure consistent
@@ -63,9 +61,7 @@ def init_cache_from_args(
     return cache
 
 
-def output_exists(
-    output_path: Path, source: str, filename: str, uploader: Any
-) -> bool:
+def output_exists(output_path: Path, source: str, filename: str, uploader: Any) -> bool:
     """Check if output file already exists locally or in S3.
 
     Used to skip redundant processing and uploads when the output

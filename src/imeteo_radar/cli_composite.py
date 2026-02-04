@@ -7,7 +7,7 @@ Separated into its own module to keep cli.py manageable.
 
 import gc
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .core.logging import get_logger
 from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
@@ -19,10 +19,10 @@ logger = get_logger(__name__)
 # Using this ensures consistent composite dimensions regardless of which sources are available
 # Values are the union of all source reprojected WGS84 bounds (from extent_index.json)
 REFERENCE_EXTENT = {
-    "west": 1.461077,   # DWD (westernmost)
+    "west": 1.461077,  # DWD (westernmost)
     "east": 26.376516,  # IMGW (easternmost)
-    "south": 44.001479, # OMSZ (southernmost)
-    "north": 56.398335, # IMGW (northernmost)
+    "south": 44.001479,  # OMSZ (southernmost)
+    "north": 56.398335,  # IMGW (northernmost)
 }
 
 # Source classification for outage detection
@@ -119,17 +119,28 @@ def _detect_source_outages(
         if data_age > max_age:
             # Stale data - OUTAGE
             availability[source_name] = False
-            reasons[source_name] = f"stale data (age: {age_minutes} min, max: {max_data_age_minutes} min)"
+            reasons[source_name] = (
+                f"stale data (age: {age_minutes} min, max: {max_data_age_minutes} min)"
+            )
             logger.warning(
                 f"  {source_name.upper()}: OUTAGE (stale data, age: {age_minutes} min)",
-                extra={"source": source_name, "status": "outage", "age_min": age_minutes},
+                extra={
+                    "source": source_name,
+                    "status": "outage",
+                    "age_min": age_minutes,
+                },
             )
         else:
             # Available
             availability[source_name] = True
             logger.info(
                 f"  {source_name.upper()}: AVAILABLE (newest: {newest_ts}, age: {age_minutes} min)",
-                extra={"source": source_name, "status": "available", "timestamp": newest_ts, "age_min": age_minutes},
+                extra={
+                    "source": source_name,
+                    "status": "available",
+                    "timestamp": newest_ts,
+                    "age_min": age_minutes,
+                },
             )
 
     return availability, reasons
@@ -151,9 +162,7 @@ def _count_available_core_sources(availability: dict[str, bool]) -> tuple[int, i
     return available_core, total_core
 
 
-def _filter_available_sources(
-    sources: dict, availability: dict[str, bool]
-) -> dict:
+def _filter_available_sources(sources: dict, availability: dict[str, bool]) -> dict:
     """Filter sources to only include available ones.
 
     Args:
@@ -416,14 +425,18 @@ def _find_multiple_common_timestamps(
                         sources_in_window[source_name] = (ts_str, file_info, ts_dt)
                     else:
                         # Keep the closer timestamp
-                        existing_ts, existing_info, existing_dt = sources_in_window[source_name]
+                        existing_ts, existing_info, existing_dt = sources_in_window[
+                            source_name
+                        ]
                         if abs(ts_dt - candidate_dt) < abs(existing_dt - candidate_dt):
                             sources_in_window[source_name] = (ts_str, file_info, ts_dt)
 
         # Check if we have enough sources
         if len(sources_in_window) >= min_sources:
             processed_windows.add(window_key)
-            source_files = {src: info for src, (_, info, _) in sources_in_window.items()}
+            source_files = {
+                src: info for src, (_, info, _) in sources_in_window.items()
+            }
             results.append((candidate_ts, source_files))
             logger.debug(
                 f"Found common timestamp {candidate_ts} with {len(source_files)} sources"
@@ -468,7 +481,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     # Initialize processed data cache using shared helper
     from .utils.cli_helpers import init_cache_from_args
 
-    cache = init_cache_from_args(args, upload_enabled=not getattr(args, "disable_upload", False))
+    cache = init_cache_from_args(
+        args, upload_enabled=not getattr(args, "disable_upload", False)
+    )
 
     # ========== STEP 1: DOWNLOAD DATA FROM ALL SOURCES ==========
     logger.info("Downloading data from all sources...")
@@ -523,7 +538,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         )
 
         if not available_timestamps:
-            logger.warning(f"{source_name.upper()}: No timestamps available from provider")
+            logger.warning(
+                f"{source_name.upper()}: No timestamps available from provider"
+            )
             all_source_files[source_name] = []
             continue
 
@@ -568,7 +585,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                             del radar_data
                             gc.collect()
                         except Exception as e:
-                            logger.debug(f"Could not cache {source_name} {timestamp}: {e}")
+                            logger.debug(
+                                f"Could not cache {source_name} {timestamp}: {e}"
+                            )
 
         # Build cached file info entries for outage detection
         cached_file_infos = []
@@ -591,7 +610,9 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         all_source_files[source_name] = downloaded_files + cached_file_infos
 
         if not timestamps_to_download and timestamps_from_cache:
-            logger.debug(f"  {source_name.upper()}: Using cached data, no download needed")
+            logger.debug(
+                f"  {source_name.upper()}: Using cached data, no download needed"
+            )
 
     # Re-add any cached timestamps not already in timestamp_groups
     if cache:
@@ -621,7 +642,8 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
             recent = source_timestamps[:3]
             # Count downloads: either not from_cache, or was_downloaded (cached after download this run)
             download_count = sum(
-                1 for ts in source_timestamps
+                1
+                for ts in source_timestamps
                 if not timestamp_groups[ts][source_name].get("from_cache", False)
                 or timestamp_groups[ts][source_name].get("was_downloaded", False)
             )
@@ -639,8 +661,6 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         sources, all_source_files, max_data_age
     )
 
-    # Count available sources
-    available_count = sum(1 for v in availability.values() if v)
     outage_count = sum(1 for v in availability.values() if not v)
 
     if outage_count > 0:
@@ -654,8 +674,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
 
     if available_core < min_core_sources:
         unavailable_core = [
-            s.upper() for s in CORE_SOURCES
-            if s in availability and not availability[s]
+            s.upper() for s in CORE_SOURCES if s in availability and not availability[s]
         ]
         logger.error(
             f"Only {available_core}/{total_core} core sources available "
@@ -716,7 +735,11 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     )
 
     # If no full matches and ARSO is included, try without ARSO
-    if not common_timestamps and "arso" in available_sources and len(available_sources) > 2:
+    if (
+        not common_timestamps
+        and "arso" in available_sources
+        and len(available_sources) > 2
+    ):
         logger.info("No common timestamps with ARSO, retrying without ARSO...")
         logger.info("   (ARSO only provides single latest timestamp)")
 
@@ -792,9 +815,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         logger.info(f"Processing timestamp {common_timestamp}...")
 
         # Filter source_files to only include available sources
-        source_files = {
-            k: v for k, v in source_files.items() if k in available_sources
-        }
+        source_files = {k: v for k, v in source_files.items() if k in available_sources}
 
         if len(source_files) < min_core_sources:
             skip_reasons["insufficient_sources"].append(
@@ -886,9 +907,13 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 gc.collect()
 
                 # Delete temp file if not from cache
-                if not from_cache and "file_path" in source_metadata.get(source_name, {}):
+                if not from_cache and "file_path" in source_metadata.get(
+                    source_name, {}
+                ):
                     try:
-                        Path(source_metadata[source_name]["file_path"]).unlink(missing_ok=True)
+                        Path(source_metadata[source_name]["file_path"]).unlink(
+                            missing_ok=True
+                        )
                     except Exception:
                         pass
 
@@ -925,9 +950,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 reproject=False,  # Already in Web Mercator
             )
 
-            logger.info(
-                f"Composite saved: {filename} ({sources_processed} sources)"
-            )
+            logger.info(f"Composite saved: {filename} ({sources_processed} sources)")
 
             # Upload composite to DigitalOcean Spaces
             if uploader:
@@ -950,6 +973,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         except Exception as e:
             logger.error(f"Failed to create composite for {common_timestamp}: {e}")
             import traceback
+
             traceback.print_exc()
 
     # Update extent index if processed any composites
@@ -958,8 +982,11 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
         if args.update_extent or not extent_path.exists():
             if last_composite is not None:
                 _save_extent_index(
-                    output_dir, last_composite, list(available_sources.keys()),
-                    args.resolution, uploader=uploader,
+                    output_dir,
+                    last_composite,
+                    list(available_sources.keys()),
+                    args.resolution,
+                    uploader=uploader,
                 )
 
     # Auto-generate coverage masks if missing (first run)
@@ -994,7 +1021,12 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
     # Export individual ARSO images when dropped from composite timestamp matching
     if arso_dropped and not args.no_individual and "arso" in sources:
         _export_dropped_arso(
-            sources, all_source_files, cache, exporter, args, uploader,
+            sources,
+            all_source_files,
+            cache,
+            exporter,
+            args,
+            uploader,
         )
 
     return 0
@@ -1092,7 +1124,9 @@ def _export_individual_sources(
         )
 
         # Get the REPROJECTED bounds from export metadata (not native bounds)
-        reprojected_extent = export_metadata.get("extent", radar_data.get("extent", {}).get("wgs84", {}))
+        reprojected_extent = export_metadata.get(
+            "extent", radar_data.get("extent", {}).get("wgs84", {})
+        )
 
         # Upload individual source to DigitalOcean Spaces
         if uploader:
@@ -1179,7 +1213,9 @@ def _export_single_source(
     )
 
     # Get the REPROJECTED bounds from export metadata (not native bounds)
-    reprojected_extent = export_metadata.get("extent", radar_data.get("extent", {}).get("wgs84", {}))
+    reprojected_extent = export_metadata.get(
+        "extent", radar_data.get("extent", {}).get("wgs84", {})
+    )
 
     # Upload individual source to DigitalOcean Spaces
     if uploader:
@@ -1216,7 +1252,9 @@ def _export_single_source(
 
 
 def _auto_generate_masks_if_missing(
-    source_names: list[str], args, composite_output: Path,
+    source_names: list[str],
+    args,
+    composite_output: Path,
 ) -> None:
     """Auto-generate coverage masks on first run if they don't exist.
 
@@ -1240,7 +1278,9 @@ def _auto_generate_masks_if_missing(
     for source_name in source_names:
         mask_path = Path(f"/tmp/iradar-data/mask/{source_name}/coverage_mask.png")
         if not mask_path.exists():
-            extent_path = Path(f"/tmp/iradar-data/extent/{source_name}/extent_index.json")
+            extent_path = Path(
+                f"/tmp/iradar-data/extent/{source_name}/extent_index.json"
+            )
             if extent_path.exists():
                 # Resolve the actual PNG directory (sibling of composite dir)
                 png_dir = _get_individual_source_dir(source_name, composite_output)
@@ -1248,7 +1288,8 @@ def _auto_generate_masks_if_missing(
                     continue
                 try:
                     result = generate_source_coverage_mask(
-                        source_name, png_dir=str(png_dir),
+                        source_name,
+                        png_dir=str(png_dir),
                     )
                     if result:
                         any_generated = True
@@ -1341,7 +1382,13 @@ def _export_dropped_arso(sources, all_source_files, cache, exporter, args, uploa
             continue
 
         _export_single_source(
-            "arso", radar_data, exporter, unix_ts, ts, args, uploader,
+            "arso",
+            radar_data,
+            exporter,
+            unix_ts,
+            ts,
+            args,
+            uploader,
         )
         exported_count += 1
         del radar_data
@@ -1574,8 +1621,11 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
     if args.update_extent or processed_count > 0:
         if last_composite is not None:
             _save_extent_index(
-                output_dir, last_composite, list(sources.keys()),
-                args.resolution, uploader=uploader,
+                output_dir,
+                last_composite,
+                list(sources.keys()),
+                args.resolution,
+                uploader=uploader,
             )
 
     # Auto-generate coverage masks if missing (first run)
@@ -1585,7 +1635,7 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
     return 0
 
 
-def _save_extent_index(output_dir, composite, source_names, resolution, uploader=None):
+def _save_extent_index(_output_dir, composite, source_names, resolution, uploader=None):
     """Save extent index JSON in canonical format to iradar-data/extent/composite/.
 
     Canonical format:

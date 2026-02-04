@@ -94,9 +94,7 @@ def reproject_to_web_mercator(
     mercator_bottom = mercator_top + dst_height * dst_transform.e
 
     # Convert mercator bounds to WGS84 for Leaflet
-    transformer = Transformer.from_crs(
-        PROJ4_WEB_MERCATOR, PROJ4_WGS84, always_xy=True
-    )
+    transformer = Transformer.from_crs(PROJ4_WEB_MERCATOR, PROJ4_WGS84, always_xy=True)
     west, south = transformer.transform(mercator_left, mercator_bottom)
     east, north = transformer.transform(mercator_right, mercator_top)
 

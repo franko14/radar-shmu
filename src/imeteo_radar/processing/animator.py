@@ -17,7 +17,11 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
     import sys
-    print("Warning: PIL (Pillow) not available. Install with: pip install Pillow", file=sys.stderr)
+
+    print(
+        "Warning: PIL (Pillow) not available. Install with: pip install Pillow",
+        file=sys.stderr,
+    )
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -319,7 +323,10 @@ class RadarAnimator:
                 logger.warning(f"Source directory not found: {source_dir}")
                 continue
 
-            logger.info(f"Creating animations for {source.upper()}", extra={"operation": "animate"})
+            logger.info(
+                f"Creating animations for {source.upper()}",
+                extra={"operation": "animate"},
+            )
             source_results = self.create_source_animation(
                 source_dir, source, output_dir
             )
