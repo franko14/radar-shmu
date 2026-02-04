@@ -5,6 +5,25 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-02-04
+
+### Changed
+- **Modernized type annotations** to Python 3.10+ syntax across core modules
+  - `Optional[X]` → `X | None`, `Dict` → `dict`, `List` → `list`, `Tuple` → `tuple`
+  - `typing.Callable` → `collections.abc.Callable`
+
+### Fixed
+- **Exception chaining**: Added `from e` to all re-raised exceptions across 8 modules
+  for proper traceback visibility
+- **Warning stacklevel**: Added `stacklevel=2` to all `warnings.warn()` calls in
+  `core/projection.py` so warnings point to the caller
+
+### Removed
+- Unused imports: `execute_parallel_downloads` (5 sources), `get_crs_web_mercator`,
+  `timedelta`, `Optional`, `field`
+- Unused variable `available_count` in composite CLI
+- Applied Black formatting across all 24 source files
+
 ## [2.5.0] - 2026-02-03
 
 ### Added

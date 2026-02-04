@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imeteo-radar"
-version = "2.5.0"
+version = "2.5.1"
 description = "Weather radar data processor for DWD, SHMU, CHMI, OMSZ, ARSO, and IMGW weather radar data"
 readme = "README.md"
 license = {text = "MIT"}
