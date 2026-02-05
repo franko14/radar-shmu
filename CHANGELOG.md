@@ -5,6 +5,31 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-02-05
+
+### Added
+- **Multi-format export support** with PNG and AVIF output formats
+  - New `ExportConfig` dataclass for configuring export options
+  - Renamed `PNGExporter` to `MultiFormatExporter` (backward-compatible alias maintained)
+  - New `export_variants()` method generates all configured format/resolution combinations
+  - AVIF support via Pillow >=10.0.0 with configurable quality (default: 50)
+
+- **Multi-resolution export** for bandwidth-optimized variants
+  - Resolution scaling with LANCZOS resampling for high-quality downscaling
+  - Configurable target resolutions in meters (e.g., 1000m, 2000m, 3000m)
+  - Output naming: `{timestamp}@{resolution}m.{format}` (e.g., `1738675200@1000m.avif`)
+
+- **New CLI flags** for fetch and composite commands
+  - `--resolutions`: Comma-separated list (e.g., `full,1000,2000`). Default: `full`
+  - `--formats`: Output formats (`png`, `avif`, or both). Default: `png`
+  - `--avif-quality`: AVIF quality 1-100. Default: 50 (optimized for radar palette images)
+
+- **Auto content-type detection** in S3 uploader for AVIF files (`image/avif`)
+
+### Changed
+- Pillow dependency updated to `>=10.0.0` for native AVIF support
+- Default AVIF quality set to 50 (provides ~40-55% size reduction vs PNG for radar images)
+
 ## [2.5.1] - 2026-02-04
 
 ### Changed
