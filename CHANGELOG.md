@@ -26,9 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Auto content-type detection** in S3 uploader for AVIF files (`image/avif`)
 
+- **S3-first caching for metadata** - Fresh containers automatically load from S3
+  - Extent index (`extent_index.json`) - geographic bounds for composite
+  - Coverage mask (`coverage_mask.png`) - alpha mask for radar coverage area
+  - Transform grids synced bidirectionally (download missing, upload local-only)
+  - New utility modules: `utils/extent_loader.py`, `utils/mask_loader.py`
+  - Cached singleton `SpacesUploader` to avoid repeated initialization
+  - New `download_metadata()` method with atomic temp file downloads
+
+- **Docker-based composite loop** (`scripts/run_composite_docker_loop.sh`)
+  - Simulates production pod-like behavior with ephemeral storage
+  - Memory limit enforced at 1.5GB to match production constraints
+  - Stage bucket safety check prevents accidental production writes
+  - Monitors and reports peak memory usage per iteration
+
 ### Changed
 - Pillow dependency updated to `>=10.0.0` for native AVIF support
 - Default AVIF quality set to 50 (provides ~40-55% size reduction vs PNG for radar images)
+- **python-dotenv** added as core dependency for .env file loading
+- Simplified `.env.example` - removed verbose comments
+- Updated `run_composite_loop.sh` defaults - PNG-only, full resolution, `--no-individual`
 
 ## [2.5.1] - 2026-02-04
 
