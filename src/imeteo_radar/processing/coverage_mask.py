@@ -595,6 +595,11 @@ def generate_source_coverage_mask(
         extra={"source": source_name, "operation": "save"},
     )
 
+    # Upload to S3
+    from ..utils.mask_loader import upload_mask_to_s3
+
+    upload_mask_to_s3(source_name)
+
     return output_path
 
 
@@ -827,6 +832,11 @@ def generate_composite_coverage_mask(
         f"Saved: {output_path}",
         extra={"operation": "save"},
     )
+
+    # Upload to S3
+    from ..utils.mask_loader import upload_mask_to_s3
+
+    upload_mask_to_s3("composite")
 
     return output_path
 

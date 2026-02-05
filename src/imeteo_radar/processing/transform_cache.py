@@ -244,6 +244,10 @@ class TransformCache:
             if grid:
                 self._memory_cache[cache_key] = grid
                 logger.debug(f"Transform cache hit (disk): {source_name}")
+
+                # Ensure grid is also in S3 (upload if missing)
+                self._ensure_in_s3(cache_key, grid)
+
                 return grid
 
         # Tier 3: S3 cache (slower but persistent)
@@ -497,6 +501,31 @@ class TransformCache:
             logger.debug(f"Saved transform cache to {local_path}")
         except Exception as e:
             logger.warning(f"Failed to save transform cache to {local_path}: {e}")
+
+    def _ensure_in_s3(self, cache_key: str, grid: TransformGrid) -> None:
+        """Ensure transform grid exists in S3, uploading if missing.
+
+        This handles the case where a grid exists locally but not in S3
+        (e.g., from before S3 upload was implemented).
+        """
+        uploader = self._get_uploader()
+        if not uploader:
+            return
+
+        s3_key = self._get_s3_key(cache_key)
+
+        try:
+            # Check if exists in S3
+            uploader.s3_client.head_object(Bucket=uploader.bucket, Key=s3_key)
+            # Already exists, nothing to do
+        except Exception as e:
+            # Check if it's a 404 (not found)
+            error_code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if error_code == "404":
+                # Not in S3, upload it
+                logger.info(f"Uploading local grid to S3: {grid.source_name}")
+                self._save_to_s3(cache_key, grid)
+            # Other errors are ignored (logged in _save_to_s3 if upload fails)
 
     def _try_load_from_s3(self, cache_key: str) -> TransformGrid | None:
         """Try to load transform grid from S3.
@@ -866,6 +895,86 @@ class TransformCache:
             logger.warning(f"Failed to clear S3 transform cache: {e}")
 
         return removed
+
+    def sync_with_s3(self) -> tuple[int, int]:
+        """Sync local and S3 transform caches bidirectionally.
+
+        - Downloads grids from S3 that don't exist locally
+        - Uploads local grids to S3 that don't exist there
+
+        This ensures both caches are in sync, enabling:
+        - Fresh containers to get grids from S3
+        - Existing local grids to be shared with other containers
+
+        Returns:
+            Tuple of (downloaded_count, uploaded_count)
+        """
+        uploader = self._get_uploader()
+        if not uploader:
+            return (0, 0)
+
+        downloaded = 0
+        uploaded = 0
+
+        # Get list of S3 grids
+        s3_keys = set()
+        try:
+            paginator = uploader.s3_client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(
+                Bucket=uploader.bucket, Prefix=self.s3_prefix
+            ):
+                for obj in page.get("Contents", []):
+                    if obj["Key"].endswith(".npz"):
+                        filename = obj["Key"].split("/")[-1]
+                        s3_keys.add(filename)
+        except Exception as e:
+            logger.warning(f"Failed to list S3 transform cache: {e}")
+            return (0, 0)
+
+        # Get list of local grids
+        local_files = {}
+        if self.local_cache_dir.exists():
+            for npz_file in self.local_cache_dir.glob("*.npz"):
+                local_files[npz_file.name] = npz_file
+
+        # Download S3-only grids to local
+        for s3_filename in s3_keys:
+            if s3_filename not in local_files:
+                local_path = self.local_cache_dir / s3_filename
+                s3_key = f"{self.s3_prefix}{s3_filename}"
+                try:
+                    uploader.s3_client.download_file(
+                        uploader.bucket, s3_key, str(local_path)
+                    )
+                    downloaded += 1
+                    logger.debug(f"Downloaded transform grid: {s3_filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to download {s3_filename}: {e}")
+
+        # Upload local-only grids to S3
+        for local_filename, local_path in local_files.items():
+            if local_filename not in s3_keys:
+                s3_key = f"{self.s3_prefix}{local_filename}"
+                try:
+                    uploader.s3_client.upload_file(
+                        str(local_path),
+                        uploader.bucket,
+                        s3_key,
+                        ExtraArgs={"ContentType": "application/octet-stream"},
+                    )
+                    uploaded += 1
+                    # Extract source name for logging
+                    source = local_filename.split("_")[0] if "_" in local_filename else local_filename
+                    logger.info(f"Uploaded local grid to S3: {source}")
+                except Exception as e:
+                    logger.warning(f"Failed to upload {local_filename}: {e}")
+
+        if downloaded > 0 or uploaded > 0:
+            logger.info(
+                f"Transform cache sync: {downloaded} downloaded, {uploaded} uploaded"
+            )
+
+        return (downloaded, uploaded)
 
     def download_from_s3(self) -> int:
         """Download all transform grids from S3 to local cache.

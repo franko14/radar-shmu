@@ -497,6 +497,25 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
         args, upload_enabled=not getattr(args, "disable_upload", False)
     )
 
+    # ========== PRELOAD METADATA FROM S3 ==========
+    # Ensure extent, mask, and grid files are available locally (download from S3 if needed)
+    # Also upload local-only files to S3 for other containers to use
+    from .utils.extent_loader import ensure_extent_exists
+    from .utils.mask_loader import ensure_mask_exists
+
+    logger.debug("Checking for cached metadata in S3...")
+    for source_name in sources.keys():
+        ensure_extent_exists(source_name)
+        ensure_mask_exists(source_name)
+    ensure_extent_exists("composite")
+    ensure_mask_exists("composite")
+
+    # Ensure transform grids are synced with S3 (download missing, upload local-only)
+    from .processing.transform_cache import TransformCache
+
+    transform_cache = TransformCache()
+    transform_cache.sync_with_s3()
+
     # ========== STEP 1: DOWNLOAD DATA FROM ALL SOURCES ==========
     logger.info("Downloading data from all sources...")
     timestamp_groups = {}
@@ -1009,10 +1028,15 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
                 )
 
     # Auto-generate coverage masks if missing (first run)
-    # Use ALL configured sources, not just available ones — ARSO may be dropped
-    # from composite matching but still needs a coverage mask
-    if processed_count > 0 and not args.no_individual:
-        _auto_generate_masks_if_missing(list(sources.keys()), args, output_dir)
+    # - With --no-individual: Only generate composite mask
+    # - Without --no-individual: Generate both individual and composite masks
+    if processed_count > 0:
+        _auto_generate_masks_if_missing(
+            source_names=list(sources.keys()),
+            args=args,
+            composite_output=output_dir,
+            include_individual=not args.no_individual,
+        )
 
     # Log processing summary with skip reasons
     total_skipped = sum(len(v) for v in skip_reasons.values())
@@ -1260,12 +1284,13 @@ def _export_single_source(
                 logger.warning(f"Failed to upload {source_name}/{variant_name}: {e}")
 
     # Save extent_index.json with REPROJECTED bounds (canonical format)
-    extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
-    extent_dir.mkdir(parents=True, exist_ok=True)
-    extent_file = extent_dir / "extent_index.json"
-    if not extent_file.exists() or args.update_extent:
-        from datetime import datetime
+    # Use centralized extent_loader (handles local save + S3 upload)
+    from datetime import datetime
 
+    from .utils.extent_loader import get_extent_path, save_extent_index
+
+    extent_file = get_extent_path(source_name)
+    if not extent_file.exists() or args.update_extent:
         extent_data = {
             "metadata": {
                 "title": f"{source_name.upper()} Radar Coverage",
@@ -1274,68 +1299,69 @@ def _export_single_source(
             },
             "wgs84": reprojected_extent,
         }
-        with open(extent_file, "w") as f:
-            json.dump(extent_data, f, indent=2)
-
-        # Upload extent to S3
-        if uploader:
-            s3_key = f"iradar-data/extent/{source_name}/extent_index.json"
-            uploader.upload_metadata(
-                extent_file, s3_key, content_type="application/json"
-            )
+        save_extent_index(source_name, extent_data, force=True, upload_to_s3=True)
 
 
 def _auto_generate_masks_if_missing(
     source_names: list[str],
     args,
     composite_output: Path,
+    include_individual: bool = True,
 ) -> None:
     """Auto-generate coverage masks on first run if they don't exist.
 
-    Checks for missing individual source masks and composite mask,
-    generating them from extent data when available. This eliminates the
-    need for a separate `imeteo-radar coverage-mask` command on first run.
+    Checks for missing masks and generates them from extent data.
+    First tries to download from S3, then generates if not found anywhere.
+    This eliminates the need for a separate `imeteo-radar coverage-mask` command.
 
     Args:
         source_names: List of ALL source identifiers to check (not just available)
         args: CLI arguments (needs args.resolution)
         composite_output: Path to composite output directory (e.g., ./outputs/composite)
+        include_individual: If True, generate individual source masks. If False, only composite.
     """
     from .processing.coverage_mask import (
         generate_composite_coverage_mask,
         generate_source_coverage_mask,
     )
+    from .utils.extent_loader import ensure_extent_exists
+    from .utils.mask_loader import ensure_mask_exists
 
     any_generated = False
 
-    # Check individual source masks for ALL sources
-    for source_name in source_names:
-        mask_path = Path(f"/tmp/iradar-data/mask/{source_name}/coverage_mask.png")
-        if not mask_path.exists():
-            extent_path = Path(
-                f"/tmp/iradar-data/extent/{source_name}/extent_index.json"
-            )
-            if extent_path.exists():
-                # Resolve the actual PNG directory (sibling of composite dir)
-                png_dir = _get_individual_source_dir(source_name, composite_output)
-                if png_dir is None:
-                    continue
-                try:
-                    result = generate_source_coverage_mask(
-                        source_name,
-                        png_dir=str(png_dir),
-                    )
-                    if result:
-                        any_generated = True
-                        logger.info(f"Auto-generated coverage mask for {source_name}")
-                except Exception as e:
-                    logger.debug(f"Could not auto-generate mask for {source_name}: {e}")
+    # Check individual source masks (only if include_individual=True)
+    if include_individual:
+        for source_name in source_names:
+            # Try S3 first, then check local
+            if ensure_mask_exists(source_name):
+                continue  # Already exists (local or downloaded from S3)
 
-    # Check composite mask
-    composite_mask = Path("/tmp/iradar-data/mask/composite/coverage_mask.png")
-    if not composite_mask.exists():
-        composite_extent = Path("/tmp/iradar-data/extent/composite/extent_index.json")
-        if composite_extent.exists():
+            # Not in S3, need to generate
+            # Ensure extent is available first
+            if not ensure_extent_exists(source_name):
+                logger.debug(f"No extent for {source_name}, skipping mask generation")
+                continue
+
+            # Resolve the actual PNG directory (sibling of composite dir)
+            png_dir = _get_individual_source_dir(source_name, composite_output)
+            if png_dir is None:
+                continue
+
+            try:
+                result = generate_source_coverage_mask(
+                    source_name,
+                    png_dir=str(png_dir),
+                )
+                if result:
+                    any_generated = True
+                    logger.info(f"Auto-generated coverage mask for {source_name}")
+            except Exception as e:
+                logger.debug(f"Could not auto-generate mask for {source_name}: {e}")
+
+    # Check composite mask (always check, regardless of include_individual)
+    if not ensure_mask_exists("composite"):
+        # Not in S3, need to generate
+        if ensure_extent_exists("composite"):
             try:
                 result = generate_composite_coverage_mask(
                     sources=source_names,
@@ -1671,8 +1697,15 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
             )
 
     # Auto-generate coverage masks if missing (first run)
-    if processed_count > 0 and not args.no_individual:
-        _auto_generate_masks_if_missing(list(sources.keys()), args, output_dir)
+    # - With --no-individual: Only generate composite mask
+    # - Without --no-individual: Generate both individual and composite masks
+    if processed_count > 0:
+        _auto_generate_masks_if_missing(
+            source_names=list(sources.keys()),
+            args=args,
+            composite_output=output_dir,
+            include_individual=not args.no_individual,
+        )
 
     return 0
 
@@ -1680,14 +1713,17 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
 def _save_extent_index(_output_dir, composite, source_names, resolution, uploader=None):
     """Save extent index JSON in canonical format to iradar-data/extent/composite/.
 
+    Uses centralized extent_loader for consistent S3 upload handling.
+
     Canonical format:
     {
       "metadata": { "title": "...", "source": "composite", "generated": "..." },
       "wgs84": { "west": ..., "east": ..., "south": ..., "north": ... }
     }
     """
-    import json
     from datetime import datetime
+
+    from .utils.extent_loader import save_extent_index
 
     logger.info("Generating extent information...")
 
@@ -1707,15 +1743,7 @@ def _save_extent_index(_output_dir, composite, source_names, resolution, uploade
         "wgs84": wgs84,
     }
 
-    extent_dir = Path("/tmp/iradar-data/extent/composite")
-    extent_dir.mkdir(parents=True, exist_ok=True)
-    extent_path = extent_dir / "extent_index.json"
-    with open(extent_path, "w") as f:
-        json.dump(extent_data, f, indent=2)
-
-    logger.info(f"Extent info saved to {extent_path}")
-
-    # Upload to S3 if uploader available
-    if uploader:
-        s3_key = "iradar-data/extent/composite/extent_index.json"
-        uploader.upload_metadata(extent_path, s3_key, content_type="application/json")
+    # Use centralized extent_loader (handles local save + S3 upload)
+    # Always force=True since we want to update on each run
+    save_extent_index("composite", extent_data, force=True, upload_to_s3=True)
+    logger.info("Extent info saved to /tmp/iradar-data/extent/composite/")

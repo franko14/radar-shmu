@@ -479,6 +479,8 @@ def save_extent_index(
 ):
     """Save extent information to JSON file at iradar-data/extent/{source}/
 
+    Uses centralized extent_loader for consistent S3 upload handling.
+
     Canonical format:
     {
       "metadata": { "title": "...", "source": "dwd", "generated": "..." },
@@ -489,19 +491,10 @@ def save_extent_index(
         source_name: Source identifier (e.g., 'dwd', 'composite')
         extent_info: Extent info dict with 'extent' and 'generated' keys
         force: Overwrite existing file
-        extent_base_dir: Base dir for extent files (default: /tmp/iradar-data/extent)
-        uploader: Optional SpacesUploader for S3 upload
+        extent_base_dir: Deprecated, kept for API compatibility (ignored)
+        uploader: Deprecated, kept for API compatibility (uses centralized loader)
     """
-    import json
-
-    base = extent_base_dir or Path("/tmp/iradar-data/extent")
-    extent_dir = base / source_name
-    extent_dir.mkdir(parents=True, exist_ok=True)
-    extent_file = extent_dir / "extent_index.json"
-
-    # Check if file exists and skip if not forced
-    if extent_file.exists() and not force:
-        return False
+    from .utils.extent_loader import save_extent_index as save_extent
 
     # Build canonical extent_index.json
     extent_data = {
@@ -513,18 +506,8 @@ def save_extent_index(
         "wgs84": extent_info.get("extent", {}),
     }
 
-    # Save to file
-    with open(extent_file, "w") as f:
-        json.dump(extent_data, f, indent=2)
-
-    logger.info(f"Saved extent information to: {extent_file}")
-
-    # Upload to S3 if uploader available
-    if uploader:
-        s3_key = f"iradar-data/extent/{source_name}/extent_index.json"
-        uploader.upload_metadata(extent_file, s3_key, content_type="application/json")
-
-    return True
+    # Use centralized extent_loader (handles local save + S3 upload)
+    return save_extent(source_name, extent_data, force=force, upload_to_s3=True)
 
 
 def cleanup_old_files(output_dir: Path, max_age_hours: int = 6):
@@ -1001,6 +984,12 @@ def fetch_command(args) -> int:
 
 def main():
     """Main CLI entry point"""
+    # Load environment variables from .env file (if present)
+    # This must happen before any code accesses os.getenv()
+    from dotenv import load_dotenv
+
+    load_dotenv()  # Loads from .env in current directory or parents
+
     parser = create_parser()
     args = parser.parse_args()
 
