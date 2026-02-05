@@ -121,6 +121,27 @@ def create_parser() -> argparse.ArgumentParser:
         help="Clear cache before running",
     )
 
+    # Export format options
+    fetch_parser.add_argument(
+        "--resolutions",
+        type=str,
+        default="full",
+        help="Comma-separated resolutions to export: 'full' for native, or meters (e.g., '1000,2000'). "
+        "Default: 'full'. Examples: 'full,1000', '1000,2000', 'full'.",
+    )
+    fetch_parser.add_argument(
+        "--formats",
+        type=str,
+        default="png",
+        help="Comma-separated output formats: 'png', 'avif', or both. Default: 'png'.",
+    )
+    fetch_parser.add_argument(
+        "--avif-quality",
+        type=int,
+        default=50,
+        help="AVIF quality (1-100). Lower = smaller files. Default: 50 (optimized for radar images).",
+    )
+
     # Extent command - generate extent information only
     extent_parser = subparsers.add_parser(
         "extent", help="Generate extent information JSON"
@@ -249,6 +270,27 @@ def create_parser() -> argparse.ArgumentParser:
         "--clear-cache",
         action="store_true",
         help="Clear cache before running",
+    )
+
+    # Export format options (same as fetch command)
+    composite_parser.add_argument(
+        "--resolutions",
+        type=str,
+        default="full",
+        help="Comma-separated resolutions to export: 'full' for native, or meters (e.g., '1000,2000'). "
+        "Default: 'full'. Examples: 'full,1000', '1000,2000', 'full'.",
+    )
+    composite_parser.add_argument(
+        "--formats",
+        type=str,
+        default="png",
+        help="Comma-separated output formats: 'png', 'avif', or both. Default: 'png'.",
+    )
+    composite_parser.add_argument(
+        "--avif-quality",
+        type=int,
+        default=50,
+        help="AVIF quality (1-100). Lower = smaller files. Default: 50 (optimized for radar images).",
     )
 
     # Cache management command
@@ -521,13 +563,56 @@ def cleanup_old_files(output_dir: Path, max_age_hours: int = 6):
         )
 
 
+def parse_export_config(args):
+    """Parse CLI arguments into ExportConfig.
+
+    Args:
+        args: CLI arguments with resolutions, formats, avif_quality attributes
+
+    Returns:
+        ExportConfig instance
+    """
+    from .processing.exporter import ExportConfig
+
+    # Parse resolutions: "full,1000,2000" -> include_full=True, resolutions_m=[1000.0, 2000.0]
+    resolutions_str = getattr(args, "resolutions", "full")
+    resolution_parts = [r.strip().lower() for r in resolutions_str.split(",")]
+
+    include_full = "full" in resolution_parts
+    resolutions_m = []
+    for part in resolution_parts:
+        if part != "full":
+            try:
+                resolutions_m.append(float(part))
+            except ValueError:
+                logger.warning(f"Invalid resolution '{part}', skipping")
+
+    # Parse formats: "png,avif" -> ["png", "avif"]
+    formats_str = getattr(args, "formats", "png")
+    formats = [f.strip().lower() for f in formats_str.split(",")]
+    formats = [f for f in formats if f in ("png", "avif")]
+    if not formats:
+        formats = ["png"]  # Fallback to PNG if invalid
+
+    # AVIF quality
+    avif_quality = getattr(args, "avif_quality", 50)
+
+    return ExportConfig(
+        resolutions_m=resolutions_m,
+        include_full=include_full,
+        formats=formats,
+        avif_quality=avif_quality,
+        avif_speed=4,  # Slightly slower for better compression
+    )
+
+
 def fetch_command(args) -> int:
     """Handle fetch command for radar data"""
 
     # Import here to avoid circular imports and speed up CLI startup
     try:
         from .config.sources import get_source_config, get_source_instance
-        from .processing.exporter import PNGExporter
+        from .processing.exporter import ExportConfig, MultiFormatExporter
         from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
         # Initialize source using centralized registry
@@ -540,7 +625,15 @@ def fetch_command(args) -> int:
         product = source_config["product"]
         country_dir = source_config["country"]
 
-        exporter = PNGExporter()
+        exporter = MultiFormatExporter()
+
+        # Parse export config from CLI arguments
+        export_config = parse_export_config(args)
+        logger.info(
+            f"Export config: resolutions={['full'] if export_config.include_full else []}"
+            f"{[f'{int(r)}m' for r in export_config.resolutions_m]}, "
+            f"formats={export_config.formats}"
+        )
 
         # Initialize DigitalOcean Spaces uploader
         uploader = None
@@ -647,22 +740,26 @@ def fetch_command(args) -> int:
                     radar_data["metadata"]["source"] = args.source
                     radar_data["metadata"]["units"] = "dBZ"
 
-                    # Export to PNG with reprojection to Web Mercator
+                    # Export all variants (full + scaled, PNG + AVIF)
                     extent = source.get_extent()
-                    exporter.export_png(
+                    base_path = output_dir / str(unix_timestamp)
+                    variants = exporter.export_variants(
                         radar_data=radar_data,
-                        output_path=output_path,
+                        output_base_path=base_path,
                         extent=extent,
-                        colormap_type="reflectivity_shmu",  # Use SHMU colormap for consistency
-                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
+                        config=export_config,
+                        colormap_type="reflectivity_shmu",
+                        reproject=True,
                     )
 
-                    logger.info(f"Saved: {output_path}")
                     processed_count += 1
 
-                    # Upload to DigitalOcean Spaces if enabled
+                    # Upload all variants to DigitalOcean Spaces if enabled
                     if upload_enabled and uploader:
-                        uploader.upload_file(output_path, args.source, filename)
+                        for variant_name, (variant_path, _) in variants.items():
+                            uploader.upload_file(
+                                variant_path, args.source, variant_path.name
+                            )
 
                     # Clean up matplotlib and numpy memory after each file
                     import gc
@@ -784,21 +881,25 @@ def fetch_command(args) -> int:
                     radar_data["metadata"]["source"] = args.source
                     radar_data["metadata"]["units"] = "dBZ"
 
-                    # Export to PNG with reprojection to Web Mercator
-                    exporter.export_png(
+                    # Export all variants (full + scaled, PNG + AVIF)
+                    base_path = output_dir / str(unix_timestamp)
+                    variants = exporter.export_variants(
                         radar_data=radar_data,
-                        output_path=output_path,
+                        output_base_path=base_path,
                         extent=extent,
+                        config=export_config,
                         colormap_type="reflectivity_shmu",
-                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
+                        reproject=True,
                     )
 
-                    logger.info(f"Saved: {output_path}")
                     processed_count += 1
 
-                    # Upload to DigitalOcean Spaces if enabled
+                    # Upload all variants to DigitalOcean Spaces if enabled
                     if upload_enabled and uploader:
-                        uploader.upload_file(output_path, args.source, filename)
+                        for variant_name, (variant_path, _) in variants.items():
+                            uploader.upload_file(
+                                variant_path, args.source, variant_path.name
+                            )
 
                     # Clean up memory
                     plt.close("all")
@@ -839,19 +940,25 @@ def fetch_command(args) -> int:
                     radar_data["metadata"]["source"] = args.source
                     radar_data["metadata"]["units"] = "dBZ"
 
-                    exporter.export_png(
+                    # Export all variants (full + scaled, PNG + AVIF)
+                    base_path = output_dir / str(unix_timestamp)
+                    variants = exporter.export_variants(
                         radar_data=radar_data,
-                        output_path=output_path,
+                        output_base_path=base_path,
                         extent=extent,
+                        config=export_config,
                         colormap_type="reflectivity_shmu",
-                        reproject=True,  # Reproject to EPSG:3857 for proper positioning
+                        reproject=True,
                     )
 
-                    logger.info(f"Saved (from cache): {output_path}")
+                    logger.info(f"Saved (from cache): {len(variants)} variants")
                     processed_count += 1
 
                     if upload_enabled and uploader:
-                        uploader.upload_file(output_path, args.source, filename)
+                        for variant_name, (variant_path, _) in variants.items():
+                            uploader.upload_file(
+                                variant_path, args.source, variant_path.name
+                            )
 
                     # Clean up memory
                     plt.close("all")

@@ -111,7 +111,32 @@ class SpacesUploader:
                     f"Failed to connect to DigitalOcean Spaces: {e}"
                 ) from e
 
-    def upload_file(self, local_path: Path, source: str, filename: str) -> str | None:
+    def _detect_content_type(self, path: Path) -> str:
+        """Detect MIME content type from file extension.
+
+        Args:
+            path: File path
+
+        Returns:
+            MIME type string
+        """
+        suffix = Path(path).suffix.lower()
+        return {
+            ".png": "image/png",
+            ".avif": "image/avif",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".json": "application/json",
+        }.get(suffix, "application/octet-stream")
+
+    def upload_file(
+        self,
+        local_path: Path,
+        source: str,
+        filename: str,
+        content_type: str | None = None,
+    ) -> str | None:
         """
         Upload a file to DigitalOcean Spaces
 
@@ -119,6 +144,7 @@ class SpacesUploader:
             local_path: Local file path to upload
             source: Source name ('dwd' for germany, 'shmu' for slovakia)
             filename: Filename to use in Spaces (e.g., '1234567890.png')
+            content_type: MIME type (auto-detected from extension if None)
 
         Returns:
             str: Public URL of uploaded file, or None if upload failed
@@ -128,6 +154,10 @@ class SpacesUploader:
         if not local_path.exists():
             logger.error(f"Local file not found: {local_path}")
             return None
+
+        # Auto-detect content type if not provided
+        if content_type is None:
+            content_type = self._detect_content_type(local_path)
 
         # Determine folder based on source using centralized registry
         folder = _get_folder_for_source(source)
@@ -141,7 +171,7 @@ class SpacesUploader:
                 str(local_path),
                 self.bucket,
                 s3_key,
-                ExtraArgs={"ACL": "public-read", "ContentType": "image/png"},
+                ExtraArgs={"ACL": "public-read", "ContentType": content_type},
             )
 
             # Construct public URL

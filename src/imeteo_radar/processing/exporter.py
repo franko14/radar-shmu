@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-PNG Exporter for Radar Data
+Multi-Format Exporter for Radar Data
 
-Exports radar data as transparent PNG overlays with consistent colorscale.
+Exports radar data as transparent PNG and AVIF overlays with consistent colorscale.
+Supports multiple resolutions and formats per timestamp.
 """
 
-import numpy as np
-
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
 
 from ..config.shmu_colormap import get_shmu_colormap
@@ -18,11 +19,44 @@ from ..core.logging import get_logger
 logger = get_logger(__name__)
 
 
-class PNGExporter:
-    """Exports radar data as transparent PNG overlays"""
+@dataclass
+class ExportConfig:
+    """Configuration for multi-format/multi-resolution export.
+
+    Attributes:
+        resolutions_m: List of target resolutions in meters to generate scaled variants.
+            Empty list = full resolution only. Example: [1000.0, 2000.0]
+        include_full: Whether to include full resolution variants.
+        formats: List of output formats. Supported: "png", "avif"
+        avif_quality: AVIF quality (1-100, higher = better quality, larger file).
+            Default 50 is optimized for radar images with limited color palette.
+        avif_speed: AVIF encoding speed (0-10, higher = faster, lower quality)
+    """
+
+    resolutions_m: list[float] = field(default_factory=list)
+    include_full: bool = True
+    formats: list[str] = field(default_factory=lambda: ["png"])
+    avif_quality: int = 50
+    avif_speed: int = 4
+
+
+# Source native resolutions in meters (approximate)
+SOURCE_RESOLUTIONS: dict[str, float] = {
+    "dwd": 1000.0,
+    "shmu": 450.0,
+    "chmi": 1550.0,
+    "omsz": 900.0,
+    "arso": 1000.0,
+    "imgw": 1500.0,
+    "composite": 500.0,
+}
+
+
+class MultiFormatExporter:
+    """Exports radar data as transparent PNG/AVIF overlays in multiple resolutions"""
 
     def __init__(self, use_transform_cache: bool = True):
-        """Initialize PNG exporter.
+        """Initialize multi-format exporter.
 
         Args:
             use_transform_cache: Whether to use cached transform grids for
@@ -177,32 +211,190 @@ class PNGExporter:
 
         return luts
 
-    def export_png(
+    def _render_to_rgba(
+        self,
+        data: np.ndarray,
+        cmap_name: str,
+        transparent_background: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Render radar data to RGBA array using LUT-based colormap.
+
+        Args:
+            data: 2D radar data array
+            cmap_name: Colormap name for LUT lookup
+            transparent_background: Whether to make NaN values transparent
+
+        Returns:
+            Tuple of (rgba_data, valid_mask)
+        """
+        lut_info = self.colormap_luts[cmap_name]
+
+        # Map data values to LUT indices (0-255)
+        # Handle NaN/invalid values separately
+        valid_mask = np.isfinite(data)
+
+        # Clip and scale valid data to 0-255 index range
+        indices = np.zeros(data.shape, dtype=np.uint8)
+        if np.any(valid_mask):
+            valid_data = data[valid_mask]
+            valid_indices = np.clip(
+                (
+                    (valid_data - lut_info["vmin"])
+                    / (lut_info["vmax"] - lut_info["vmin"])
+                    * 255
+                ),
+                0,
+                255,
+            ).astype(np.uint8)
+            indices[valid_mask] = valid_indices
+
+        # Apply LUT: direct uint8 RGBA lookup (very fast, low memory!)
+        rgba_data = lut_info["lut"][indices]
+
+        # Handle transparency for NaN/invalid values
+        if transparent_background:
+            rgba_data[~valid_mask, 3] = 0  # Set alpha channel to 0
+
+        return rgba_data, valid_mask
+
+    def _save_png(
+        self,
+        rgba_data: np.ndarray,
+        output_path: Path,
+        transparent_background: bool = True,
+    ) -> None:
+        """Save RGBA array as optimized indexed PNG.
+
+        Args:
+            rgba_data: RGBA uint8 array (H, W, 4)
+            output_path: Path to save PNG file
+            transparent_background: Whether to preserve transparency
+        """
+        img = Image.fromarray(rgba_data, mode="RGBA")
+
+        # Convert to indexed PNG (8-bit palette) for smaller file size
+        if transparent_background:
+            img = img.convert("P", palette=Image.ADAPTIVE, colors=256)
+        else:
+            img = img.convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=256)
+
+        img.save(
+            output_path,
+            format="PNG",
+            optimize=True,
+            compress_level=9,
+        )
+
+    def _save_avif(
+        self,
+        rgba_data: np.ndarray,
+        output_path: Path,
+        quality: int = 85,
+        speed: int = 6,
+    ) -> None:
+        """Save RGBA array as AVIF.
+
+        Args:
+            rgba_data: RGBA uint8 array (H, W, 4)
+            output_path: Path to save AVIF file
+            quality: AVIF quality (1-100)
+            speed: Encoding speed (0-10, higher = faster)
+        """
+        img = Image.fromarray(rgba_data, mode="RGBA")
+        img.save(output_path, format="AVIF", quality=quality, speed=speed)
+
+    def _calculate_scaled_dimensions(
+        self,
+        shape: tuple[int, int],
+        wgs84_bounds: dict[str, float],
+        target_resolution_m: float,
+        source_name: str = "",
+    ) -> tuple[int, int]:
+        """Calculate target dimensions for given resolution in meters.
+
+        Uses geographic extent to determine scale factor. Will upscale if needed
+        to provide consistent output across all sources.
+
+        Args:
+            shape: Current (height, width) of image
+            wgs84_bounds: Dict with west, east, south, north bounds
+            target_resolution_m: Target resolution in meters
+            source_name: Source name for native resolution lookup
+
+        Returns:
+            (new_height, new_width)
+        """
+        import math
+
+        height, width = shape
+
+        # Get native resolution from source or estimate from extent
+        native_res = SOURCE_RESOLUTIONS.get(source_name.lower())
+        if native_res is None:
+            # Estimate from extent - use latitude center for meters per degree
+            lat_center = (wgs84_bounds["south"] + wgs84_bounds["north"]) / 2
+            lat_span = wgs84_bounds["north"] - wgs84_bounds["south"]
+            meters_per_deg_lat = 111320  # Approximate meters per degree latitude
+            extent_height_m = lat_span * meters_per_deg_lat * math.cos(
+                math.radians(lat_center)
+            )
+            native_res = extent_height_m / height
+
+        # Calculate scale factor (may be >1 for upscaling, <1 for downscaling)
+        scale_factor = native_res / target_resolution_m
+        new_height = max(1, int(height * scale_factor))
+        new_width = max(1, int(width * scale_factor))
+
+        return (new_height, new_width)
+
+    def _resize_rgba(
+        self,
+        rgba_data: np.ndarray,
+        target_shape: tuple[int, int],
+    ) -> np.ndarray:
+        """Resize RGBA array using high-quality resampling.
+
+        Args:
+            rgba_data: RGBA uint8 array (H, W, 4)
+            target_shape: (new_height, new_width)
+
+        Returns:
+            Resized RGBA array
+        """
+        img = Image.fromarray(rgba_data, mode="RGBA")
+        # Use LANCZOS for high-quality downsampling
+        resized = img.resize((target_shape[1], target_shape[0]), Image.LANCZOS)
+        return np.array(resized)
+
+    def export_variants(
         self,
         radar_data: dict[str, Any],
-        output_path: Path,
+        output_base_path: Path,
         extent: dict[str, Any],
+        config: ExportConfig | None = None,
         colormap_type: str = "auto",
         transparent_background: bool = True,
         reproject: bool = True,
         use_cached_transform: bool = True,
-    ) -> tuple[Path, dict[str, Any]]:
-        """
-        Export radar data as transparent PNG using PIL with LUT-based colormap.
+    ) -> dict[str, tuple[Path, dict[str, Any]]]:
+        """Export all configured variants (formats and resolutions).
 
         Args:
             radar_data: Radar data dictionary with 'data' array
-            output_path: Path where to save the PNG file
+            output_base_path: Base path without extension (e.g., /output/germany/1738675200)
             extent: Geographic extent information
+            config: Export configuration. Defaults to PNG+AVIF with 1000m scaled variant.
             colormap_type: Type of colormap to use ('auto', 'shmu', etc.)
             transparent_background: Whether to make background transparent
             reproject: Whether to reproject data to Web Mercator (EPSG:3857)
-            use_cached_transform: Whether to use cached transform grids for
-                faster reprojection. Default True.
+            use_cached_transform: Whether to use cached transform grids
 
         Returns:
-            Tuple of (saved_path, metadata_dict)
+            Dict mapping variant_name to (path, metadata) tuple.
+            Variant names: "full.png", "full.avif", "@1000m.png", "@1000m.avif", etc.
         """
+        if config is None:
+            config = ExportConfig()
 
         try:
             data = radar_data["data"]
@@ -215,12 +407,10 @@ class PNGExporter:
             used_cache = False
 
             if reproject:
-                # Get projection info from radar_data if available
                 projection_info = radar_data.get("projection")
                 source_name = radar_data.get("metadata", {}).get("source", "").lower()
 
                 # Try fast path with cached transform first
-                # Works for both projected sources (with proj_def) and WGS84 sources
                 if (
                     use_cached_transform
                     and self._use_transform_cache
@@ -247,14 +437,12 @@ class PNGExporter:
 
                     data_extent = radar_data.get("extent", extent)
 
-                    # Build native CRS params from projection info
                     native_crs, native_transform, native_bounds = (
                         build_native_params_from_projection_info(
                             data.shape, projection_info
                         )
                     )
 
-                    # WGS84 sources (OMSZ, ARSO) — build params from extent
                     if native_crs is None:
                         wgs84 = {}
                         if data_extent:
@@ -267,7 +455,7 @@ class PNGExporter:
                             k in wgs84 for k in ("west", "east", "south", "north")
                         ):
                             raise ValueError(
-                                f"Cannot reproject: no projection info and no WGS84 extent bounds"
+                                "Cannot reproject: no projection info and no WGS84 extent bounds"
                             )
                         native_crs = get_crs_wgs84()
                         native_transform = rt_from_bounds(
@@ -285,88 +473,30 @@ class PNGExporter:
                             wgs84["north"],
                         )
 
-                    # Single reprojection path for all sources
                     data, wgs84_bounds, _ = reproject_to_web_mercator(
                         data, native_crs, native_transform, native_bounds
                     )
                     output_extent = {"wgs84": wgs84_bounds}
 
-            logger.debug(
-                f"Fast PNG export: {data.shape} -> {output_path}",
-                extra={"operation": "export"},
-            )
-
-            # Get colormap name (for LUT lookup)
+            # Get colormap and render to RGBA
             cmap_info = self._select_colormap(radar_data, colormap_type)
             cmap_name = cmap_info["name"]
-
-            # Get pre-computed LUT for this colormap
             lut_info = self.colormap_luts[cmap_name]
 
-            # MEMORY OPTIMIZATION: Use uint8 LUT instead of float64 colormap
-            # Old method used ~800 MB in intermediate float64 arrays
-            # New method: direct uint8 lookup, only ~80 MB peak
-
-            # Map data values to LUT indices (0-255)
-            # Handle NaN/invalid values separately
-            valid_mask = np.isfinite(data)
-
-            # Clip and scale valid data to 0-255 index range
-            indices = np.zeros(data.shape, dtype=np.uint8)
-            if np.any(valid_mask):
-                valid_data = data[valid_mask]
-                valid_indices = np.clip(
-                    (
-                        (valid_data - lut_info["vmin"])
-                        / (lut_info["vmax"] - lut_info["vmin"])
-                        * 255
-                    ),
-                    0,
-                    255,
-                ).astype(np.uint8)
-                indices[valid_mask] = valid_indices
-
-            # Apply LUT: direct uint8 RGBA lookup (very fast, low memory!)
-            rgba_data = lut_info["lut"][indices]
-
-            # Handle transparency for NaN/invalid values
-            if transparent_background:
-                # Set alpha to 0 for invalid data (NaN values)
-                rgba_data[~valid_mask, 3] = 0  # Set alpha channel to 0
-
-            # Create PIL image directly from RGBA array
-            # PIL expects (height, width, channels)
-            img = Image.fromarray(rgba_data, mode="RGBA")
-
-            # Convert to indexed PNG (8-bit palette) for much smaller file size
-            # SHMU colormap has ~24 discrete colors, indexed PNG supports 256
-            # This gives ~75% size reduction with zero quality loss
-            if transparent_background:
-                # Convert RGBA to palette mode (P) with alpha channel preserved
-                # Using ADAPTIVE palette with 256 colors (more than enough for ~24 SHMU colors)
-                img = img.convert("P", palette=Image.ADAPTIVE, colors=256)
-            else:
-                # Without transparency, convert directly to RGB then to palette
-                img = img.convert("RGB").convert(
-                    "P", palette=Image.ADAPTIVE, colors=256
-                )
-
-            # Save with maximum PNG compression
-            img.save(
-                output_path,
-                format="PNG",
-                optimize=True,
-                compress_level=9,  # Maximum compression for smallest file size
+            rgba_data, valid_mask = self._render_to_rgba(
+                data, cmap_name, transparent_background
             )
 
-            # Create metadata with extent info for Leaflet overlays
+            # Get WGS84 bounds for scaling calculations
             wgs84_extent = output_extent.get("wgs84", extent.get("wgs84", {}))
-            metadata = {
-                "file_path": str(output_path),
+            source_name = radar_data.get("metadata", {}).get("source", "").lower()
+
+            # Build base metadata
+            base_metadata = {
                 "dimensions": data.shape,
-                "extent": wgs84_extent,  # WGS84 bounds for Leaflet ImageOverlay
+                "extent": wgs84_extent,
                 "extent_reference": "config/extent_index.json",
-                "source": radar_data.get("metadata", {}).get("source", "unknown"),
+                "source": source_name or "unknown",
                 "colormap": cmap_name,
                 "units": lut_info["units"],
                 "data_range": [float(np.nanmin(data)), float(np.nanmax(data))],
@@ -374,24 +504,135 @@ class PNGExporter:
                 "used_cached_transform": used_cache,
                 "transparent": transparent_background,
                 "timestamp": radar_data.get("timestamp", "unknown"),
-                "export_method": "PIL_fast_LUT",
                 "reprojected": reproject,
-                "format": "PNG (8-bit indexed palette, optimized)",
             }
 
-            logger.info(
-                f"Saved: {output_path}",
-                extra={"operation": "export"},
-            )
-            logger.debug(
-                f"Size: {data.shape}, Range: [{metadata['data_range'][0]:.1f}, {metadata['data_range'][1]:.1f}] {lut_info['units']}",
-            )
+            variants: dict[str, tuple[Path, dict[str, Any]]] = {}
+            output_base_path = Path(output_base_path)
 
-            return output_path, metadata
+            # Export full resolution variants
+            if config.include_full:
+                for fmt in config.formats:
+                    variant_name = f"full.{fmt}"
+                    output_path = output_base_path.with_suffix(f".{fmt}")
+
+                    if fmt == "png":
+                        self._save_png(rgba_data, output_path, transparent_background)
+                    elif fmt == "avif":
+                        self._save_avif(
+                            rgba_data,
+                            output_path,
+                            config.avif_quality,
+                            config.avif_speed,
+                        )
+
+                    metadata = {
+                        **base_metadata,
+                        "file_path": str(output_path),
+                        "format": fmt.upper(),
+                        "resolution": "full",
+                        "export_method": "PIL_fast_LUT",
+                    }
+                    variants[variant_name] = (output_path, metadata)
+                    logger.info(f"Saved: {output_path}")
+
+            # Export scaled variants
+            for target_res in config.resolutions_m:
+                scaled_dims = self._calculate_scaled_dimensions(
+                    data.shape, wgs84_extent, target_res, source_name
+                )
+                scaled_rgba = self._resize_rgba(rgba_data, scaled_dims)
+
+                for fmt in config.formats:
+                    res_suffix = f"@{int(target_res)}m"
+                    variant_name = f"{res_suffix}.{fmt}"
+                    output_path = output_base_path.parent / (
+                        f"{output_base_path.stem}{res_suffix}.{fmt}"
+                    )
+
+                    if fmt == "png":
+                        self._save_png(scaled_rgba, output_path, transparent_background)
+                    elif fmt == "avif":
+                        self._save_avif(
+                            scaled_rgba,
+                            output_path,
+                            config.avif_quality,
+                            config.avif_speed,
+                        )
+
+                    metadata = {
+                        **base_metadata,
+                        "file_path": str(output_path),
+                        "dimensions": scaled_dims,
+                        "format": fmt.upper(),
+                        "resolution": f"{int(target_res)}m",
+                        "export_method": "PIL_fast_LUT_scaled",
+                    }
+                    variants[variant_name] = (output_path, metadata)
+                    logger.info(f"Saved: {output_path}")
+
+            return variants
 
         except Exception:
-            logger.error(f"PNG export failed for {output_path}", exc_info=True)
+            logger.error(f"Export failed for {output_base_path}", exc_info=True)
             raise
+
+    def export_png(
+        self,
+        radar_data: dict[str, Any],
+        output_path: Path,
+        extent: dict[str, Any],
+        colormap_type: str = "auto",
+        transparent_background: bool = True,
+        reproject: bool = True,
+        use_cached_transform: bool = True,
+    ) -> tuple[Path, dict[str, Any]]:
+        """
+        Export radar data as transparent PNG using PIL with LUT-based colormap.
+
+        This is a backward-compatible method that exports a single PNG file.
+        For multi-format export, use export_variants() instead.
+
+        Args:
+            radar_data: Radar data dictionary with 'data' array
+            output_path: Path where to save the PNG file
+            extent: Geographic extent information
+            colormap_type: Type of colormap to use ('auto', 'shmu', etc.)
+            transparent_background: Whether to make background transparent
+            reproject: Whether to reproject data to Web Mercator (EPSG:3857)
+            use_cached_transform: Whether to use cached transform grids for
+                faster reprojection. Default True.
+
+        Returns:
+            Tuple of (saved_path, metadata_dict)
+        """
+        # Use export_variants with PNG-only config
+        config = ExportConfig(
+            resolutions_m=[],  # No scaled variants
+            include_full=True,
+            formats=["png"],
+        )
+
+        # Ensure output_path has .png extension for base path calculation
+        output_path = Path(output_path)
+        base_path = output_path.with_suffix("")
+
+        variants = self.export_variants(
+            radar_data=radar_data,
+            output_base_path=base_path,
+            extent=extent,
+            config=config,
+            colormap_type=colormap_type,
+            transparent_background=transparent_background,
+            reproject=reproject,
+            use_cached_transform=use_cached_transform,
+        )
+
+        # Return the full PNG variant
+        if "full.png" in variants:
+            return variants["full.png"]
+
+        raise RuntimeError("PNG export failed - no variant produced")
 
     def _select_colormap(
         self, radar_data: dict[str, Any], colormap_type: str
@@ -433,3 +674,7 @@ class PNGExporter:
                 f"Unknown data type (units: {units}, quantity: {quantity}), using SHMU colormap",
             )
             return {"name": "reflectivity_shmu", **self.colormaps["reflectivity_shmu"]}
+
+
+# Backward compatibility alias
+PNGExporter = MultiFormatExporter

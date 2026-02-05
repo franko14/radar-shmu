@@ -182,7 +182,7 @@ def _filter_available_sources(sources: dict, availability: dict[str, bool]) -> d
 def composite_command_impl(args: Any) -> int:
     """Handle composite generation command"""
     try:
-        from .processing.exporter import PNGExporter
+        from .processing.exporter import MultiFormatExporter
         from .sources.arso import ARSORadarSource
         from .sources.chmi import CHMIRadarSource
         from .sources.dwd import DWDRadarSource
@@ -242,16 +242,28 @@ def composite_command_impl(args: Any) -> int:
                 logger.error(f"Unknown source: {source_name}")
                 return 1
 
-        # Initialize PNG exporter
-        exporter = PNGExporter()
+        # Initialize multi-format exporter with config from CLI args
+        from .cli import parse_export_config
+
+        exporter = MultiFormatExporter()
+        export_config = parse_export_config(args)
+        logger.info(
+            f"Export config: resolutions={['full'] if export_config.include_full else []}"
+            f"{[f'{int(r)}m' for r in export_config.resolutions_m]}, "
+            f"formats={export_config.formats}"
+        )
 
         # Determine what to process
         if args.backload:
             # Backload mode - process historical data
-            return _process_backload(args, sources, exporter, output_dir, uploader)
+            return _process_backload(
+                args, sources, exporter, export_config, output_dir, uploader
+            )
         else:
             # Single timestamp mode - process latest available data
-            return _process_latest(args, sources, exporter, output_dir, uploader)
+            return _process_latest(
+                args, sources, exporter, export_config, output_dir, uploader
+            )
 
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
@@ -445,7 +457,7 @@ def _find_multiple_common_timestamps(
     return results
 
 
-def _process_latest(args, sources, exporter, output_dir, uploader=None):
+def _process_latest(args, sources, exporter, export_config, output_dir, uploader=None):
     """Process latest available data from all sources with outage detection and reprocessing.
 
     OUTAGE DETECTION:
@@ -891,6 +903,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                         source_name,
                         radar_data,
                         exporter,
+                        export_config,
                         unix_timestamp,
                         common_timestamp,
                         args,
@@ -938,27 +951,33 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
                 "data": composite["data"],
                 "timestamp": common_timestamp,
                 "product": "composite",
-                "source": "composite",
-                "units": "dBZ",
+                "metadata": {"source": "composite", "units": "dBZ"},
             }
             # Composite data is already in Web Mercator, no reprojection needed
-            exporter.export_png(
+            # Export all variants (full + scaled, PNG + AVIF)
+            base_path = output_dir / str(unix_timestamp)
+            variants = exporter.export_variants(
                 radar_data=radar_data_for_export,
-                output_path=output_path,
+                output_base_path=base_path,
                 extent={"wgs84": composite["extent"]},
+                config=export_config,
                 colormap_type="shmu",
                 reproject=False,  # Already in Web Mercator
             )
 
-            logger.info(f"Composite saved: {filename} ({sources_processed} sources)")
+            logger.info(
+                f"Composite saved: {len(variants)} variants ({sources_processed} sources)"
+            )
 
-            # Upload composite to DigitalOcean Spaces
+            # Upload all composite variants to DigitalOcean Spaces
             if uploader:
-                try:
-                    uploader.upload_file(output_path, "composite", filename)
-                    logger.debug(f"Uploaded composite to Spaces: composite/{filename}")
-                except Exception as e:
-                    logger.warning(f"Failed to upload composite: {e}")
+                for variant_name, (variant_path, _) in variants.items():
+                    try:
+                        uploader.upload_file(
+                            variant_path, "composite", variant_path.name
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to upload composite {variant_name}: {e}")
 
             processed_count += 1
             last_composite = {
@@ -1025,6 +1044,7 @@ def _process_latest(args, sources, exporter, output_dir, uploader=None):
             all_source_files,
             cache,
             exporter,
+            export_config,
             args,
             uploader,
         )
@@ -1066,7 +1086,13 @@ def _get_individual_source_dir(source_name: str, composite_output: Path) -> Path
 
 
 def _export_individual_sources(
-    sources_data, exporter, unix_timestamp, timestamp_str, args, uploader=None
+    sources_data,
+    exporter,
+    export_config,
+    unix_timestamp,
+    timestamp_str,
+    args,
+    uploader=None,
 ):
     """Export individual source images with their native extents.
 
@@ -1081,7 +1107,8 @@ def _export_individual_sources(
 
     Args:
         sources_data: List of (source_name, radar_data) tuples
-        exporter: PNGExporter instance
+        exporter: MultiFormatExporter instance
+        export_config: ExportConfig for multi-format export
         unix_timestamp: Unix timestamp for filename
         timestamp_str: Timestamp string for metadata
         args: CLI arguments
@@ -1102,10 +1129,6 @@ def _export_individual_sources(
         # Create output directory
         source_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename
-        filename = f"{unix_timestamp}.png"
-        output_path = source_output_dir / filename
-
         # Use radar_data directly - it contains data, extent, and projection info
         # needed for proper reprojection to Web Mercator
         radar_data["timestamp"] = timestamp_str
@@ -1113,28 +1136,34 @@ def _export_individual_sources(
         radar_data["metadata"]["source"] = source_name
         radar_data["metadata"]["units"] = "dBZ"
 
-        # Export to PNG with reprojection to Web Mercator
-        logger.info(f"{source_name.upper()} -> {output_path}")
-        _, export_metadata = exporter.export_png(
+        # Export all variants (full + scaled, PNG + AVIF)
+        base_path = source_output_dir / str(unix_timestamp)
+        logger.info(f"{source_name.upper()} -> {base_path}.*")
+        variants = exporter.export_variants(
             radar_data=radar_data,
-            output_path=output_path,
+            output_base_path=base_path,
             extent=radar_data["extent"],
+            config=export_config,
             colormap_type="shmu",
             reproject=True,  # Reproject to EPSG:3857 for proper positioning
         )
 
         # Get the REPROJECTED bounds from export metadata (not native bounds)
-        reprojected_extent = export_metadata.get(
-            "extent", radar_data.get("extent", {}).get("wgs84", {})
-        )
+        reprojected_extent = {}
+        if variants:
+            first_metadata = next(iter(variants.values()))[1]
+            reprojected_extent = first_metadata.get(
+                "extent", radar_data.get("extent", {}).get("wgs84", {})
+            )
 
-        # Upload individual source to DigitalOcean Spaces
+        # Upload all variants to DigitalOcean Spaces
         if uploader:
-            try:
-                uploader.upload_file(output_path, source_name, filename)
-                logger.debug(f"Uploaded to Spaces: {source_name}/{filename}")
-            except Exception as e:
-                logger.warning(f"Failed to upload {source_name}: {e}")
+            for variant_name, (variant_path, _) in variants.items():
+                try:
+                    uploader.upload_file(variant_path, source_name, variant_path.name)
+                    logger.debug(f"Uploaded to Spaces: {source_name}/{variant_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to upload {source_name}/{variant_name}: {e}")
 
         # Save extent_index.json with REPROJECTED bounds (canonical format)
         extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
@@ -1158,6 +1187,7 @@ def _export_single_source(
     source_name,
     radar_data,
     exporter,
+    export_config,
     unix_timestamp,
     timestamp_str,
     args,
@@ -1174,7 +1204,8 @@ def _export_single_source(
     Args:
         source_name: Source identifier (e.g., 'dwd', 'shmu')
         radar_data: Dictionary from source.process_to_array()
-        exporter: PNGExporter instance
+        exporter: MultiFormatExporter instance
+        export_config: ExportConfig for multi-format export
         unix_timestamp: Unix timestamp for filename
         timestamp_str: Timestamp string for metadata
         args: CLI arguments
@@ -1191,9 +1222,6 @@ def _export_single_source(
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate filename
-    output_path = output_dir / f"{unix_timestamp}.png"
-
     # Use radar_data directly - it contains data, extent, and projection info
     # needed for proper reprojection to Web Mercator
     radar_data["timestamp"] = timestamp_str
@@ -1201,29 +1229,35 @@ def _export_single_source(
     radar_data["metadata"]["source"] = source_name
     radar_data["metadata"]["units"] = "dBZ"
 
-    # Export to PNG with reprojection to Web Mercator
-    filename = f"{unix_timestamp}.png"
-    logger.debug(f"{source_name.upper()} -> {output_path}")
-    _, export_metadata = exporter.export_png(
+    # Export all variants (full + scaled, PNG + AVIF)
+    base_path = output_dir / str(unix_timestamp)
+    logger.debug(f"{source_name.upper()} -> {base_path}.*")
+    variants = exporter.export_variants(
         radar_data=radar_data,
-        output_path=output_path,
+        output_base_path=base_path,
         extent=radar_data["extent"],
+        config=export_config,
         colormap_type="shmu",
         reproject=True,  # Reproject to EPSG:3857 for proper positioning
     )
 
     # Get the REPROJECTED bounds from export metadata (not native bounds)
-    reprojected_extent = export_metadata.get(
-        "extent", radar_data.get("extent", {}).get("wgs84", {})
-    )
+    # Use the first variant's metadata for extent
+    reprojected_extent = {}
+    if variants:
+        first_metadata = next(iter(variants.values()))[1]
+        reprojected_extent = first_metadata.get(
+            "extent", radar_data.get("extent", {}).get("wgs84", {})
+        )
 
-    # Upload individual source to DigitalOcean Spaces
+    # Upload all variants to DigitalOcean Spaces
     if uploader:
-        try:
-            uploader.upload_file(output_path, source_name, filename)
-            logger.debug(f"Uploaded to Spaces: {source_name}/{filename}")
-        except Exception as e:
-            logger.warning(f"Failed to upload {source_name}: {e}")
+        for variant_name, (variant_path, _) in variants.items():
+            try:
+                uploader.upload_file(variant_path, source_name, variant_path.name)
+                logger.debug(f"Uploaded to Spaces: {source_name}/{variant_path.name}")
+            except Exception as e:
+                logger.warning(f"Failed to upload {source_name}/{variant_name}: {e}")
 
     # Save extent_index.json with REPROJECTED bounds (canonical format)
     extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
@@ -1318,19 +1352,22 @@ def _auto_generate_masks_if_missing(
         logger.info("Coverage masks generated (first run)")
 
 
-def _export_dropped_arso(sources, all_source_files, cache, exporter, args, uploader):
+def _export_dropped_arso(
+    sources, all_source_files, cache, exporter, export_config, args, uploader
+):
     """Export individual ARSO images when ARSO was dropped from composite matching.
 
     ARSO data is cached in Step 4 of _process_latest(). When ARSO's timestamp
     doesn't match other sources, it's excluded from the composite but the data
     is still available in cache. This function loads it back and exports
-    individual PNGs so ARSO coverage is still visible on the map.
+    individual images so ARSO coverage is still visible on the map.
 
     Args:
         sources: Dict of source configurations {name: (source_obj, product)}
         all_source_files: Dict of downloaded files {name: [file_info, ...]}
         cache: ProcessedDataCache instance (or None)
-        exporter: PNGExporter instance
+        exporter: MultiFormatExporter instance
+        export_config: ExportConfig for multi-format export
         args: CLI arguments
         uploader: Optional SpacesUploader instance
     """
@@ -1385,6 +1422,7 @@ def _export_dropped_arso(sources, all_source_files, cache, exporter, args, uploa
             "arso",
             radar_data,
             exporter,
+            export_config,
             unix_ts,
             ts,
             args,
@@ -1401,7 +1439,7 @@ def _export_dropped_arso(sources, all_source_files, cache, exporter, args, uploa
         )
 
 
-def _process_backload(args, sources, exporter, output_dir, uploader=None):
+def _process_backload(args, sources, exporter, export_config, output_dir, uploader=None):
     """Process historical data from all sources - MEMORY OPTIMIZED TWO-PASS VERSION
 
     TWO-PASS ARCHITECTURE for ~75% memory reduction:
@@ -1534,6 +1572,7 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
                         source_name,
                         radar_data,
                         exporter,
+                        export_config,
                         unix_timestamp,
                         timestamp,
                         args,
@@ -1568,33 +1607,36 @@ def _process_backload(args, sources, exporter, output_dir, uploader=None):
         try:
             composite = compositor.get_composite()
 
-            filename = f"{unix_timestamp}.png"
-            output_path = output_dir / filename
-
-            logger.info(f"Exporting composite to {filename}...")
+            logger.info(f"Exporting composite for {timestamp}...")
             radar_data_for_export = {
                 "data": composite["data"],
                 "timestamp": timestamp,
                 "product": "composite",
-                "source": "composite",
-                "units": "dBZ",
+                "metadata": {"source": "composite", "units": "dBZ"},
             }
             # Composite data is already in Web Mercator, no reprojection needed
-            exporter.export_png(
+            # Export all variants (full + scaled, PNG + AVIF)
+            base_path = output_dir / str(unix_timestamp)
+            variants = exporter.export_variants(
                 radar_data=radar_data_for_export,
-                output_path=output_path,
+                output_base_path=base_path,
                 extent={"wgs84": composite["extent"]},
+                config=export_config,
                 colormap_type="shmu",
                 reproject=False,  # Already in Web Mercator
             )
 
-            # Upload composite to DigitalOcean Spaces
+            logger.info(f"Composite saved: {len(variants)} variants")
+
+            # Upload all composite variants to DigitalOcean Spaces
             if uploader:
-                try:
-                    uploader.upload_file(output_path, "composite", filename)
-                    logger.debug(f"Uploaded composite to Spaces: composite/{filename}")
-                except Exception as e:
-                    logger.warning(f"Failed to upload composite: {e}")
+                for variant_name, (variant_path, _) in variants.items():
+                    try:
+                        uploader.upload_file(
+                            variant_path, "composite", variant_path.name
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to upload composite {variant_name}: {e}")
 
             processed_count += 1
             last_composite = {

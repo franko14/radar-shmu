@@ -32,6 +32,8 @@ while true; do
     # Run composite with backload
     imeteo-radar composite \
         --output ./outputs/composite \
+        --formats png,avif \
+        --resolutions full,1000,2000,3000 \
         2>&1
 
     echo ""
