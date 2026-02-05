@@ -63,6 +63,9 @@ imeteo-radar fetch [OPTIONS]
 | `--update-extent` | flag | - | Force regenerate extent_index.json |
 | `--disable-upload` | flag | - | Skip cloud storage upload |
 | `--reprocess-count` | int | `6` | Number of recent timestamps to fetch (~30 min) |
+| `--resolutions` | string | `full` | Comma-separated: `full` for native, or meters (e.g., `full,1000,2000`) |
+| `--formats` | string | `png` | Comma-separated: `png`, `avif`, or both |
+| `--avif-quality` | int | `50` | AVIF quality 1-100 (lower = smaller file) |
 | `--cache-dir` | path | `/tmp/iradar-data/data` | Directory for processed data cache |
 | `--cache-ttl` | int | `60` | Cache TTL in minutes |
 | `--no-cache` | flag | - | Disable caching entirely |
@@ -106,6 +109,12 @@ imeteo-radar fetch --source shmu --update-extent
 
 # Disable caching (always re-download)
 imeteo-radar fetch --source dwd --no-cache
+
+# Export multiple formats and resolutions
+imeteo-radar fetch --source dwd --formats png,avif --resolutions full,1000,2000
+
+# AVIF only with custom quality
+imeteo-radar fetch --source shmu --formats avif --avif-quality 40
 ```
 
 ### Output
@@ -144,6 +153,9 @@ imeteo-radar composite [OPTIONS]
 | `--min-core-sources` | int | `3` | Minimum core sources required for composite |
 | `--max-data-age` | int | `30` | Maximum age of data in minutes (outage threshold) |
 | `--reprocess-count` | int | `6` | Number of recent timestamps to reprocess |
+| `--resolutions` | string | `full` | Comma-separated export resolutions: `full` or meters (e.g., `full,1000,2000`) |
+| `--formats` | string | `png` | Comma-separated output formats: `png`, `avif`, or both |
+| `--avif-quality` | int | `50` | AVIF quality 1-100 (lower = smaller file) |
 | `--cache-dir` | path | `/tmp/iradar-data/data` | Directory for processed data cache |
 | `--cache-ttl` | int | `60` | Cache TTL in minutes |
 | `--no-cache` | flag | - | Disable caching entirely |
@@ -177,6 +189,12 @@ imeteo-radar composite \
   --resolution 500 \
   --backload --hours 3 \
   --output ./outputs/composite
+
+# Export multiple formats and resolutions
+imeteo-radar composite --formats png,avif --resolutions full,1000,2000
+
+# AVIF only for bandwidth optimization
+imeteo-radar composite --formats avif --resolutions 1000,2000 --avif-quality 45
 ```
 
 ### How It Works
@@ -369,10 +387,12 @@ imeteo-radar coverage-mask --composite --output ./outputs
 
 ## Output Files
 
-### PNG Images
+### Radar Images
 
-- **Format**: RGBA PNG with alpha channel
-- **Naming**: Unix timestamp (e.g., `1728221400.png`)
+- **Formats**: PNG (lossless) or AVIF (lossy, ~40-55% smaller)
+- **Naming convention**:
+  - Full resolution: `{timestamp}.{format}` (e.g., `1728221400.png`)
+  - Scaled resolution: `{timestamp}@{meters}m.{format}` (e.g., `1728221400@1000m.avif`)
 - **Colormap**: Official SHMU colorscale (-35 to 85 dBZ)
 - **Transparency**: No-data areas are fully transparent
 - **Projection**: Web Mercator (EPSG:3857) — reprojected from native source projections
