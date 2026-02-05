@@ -4,7 +4,7 @@ DigitalOcean Spaces Uploader
 
 Handles uploading radar PNG files to DigitalOcean Spaces (S3-compatible storage).
 
-Credentials are loaded from environment variables:
+Credentials are loaded from environment variables (or .env file via python-dotenv):
 - DIGITALOCEAN_SPACES_KEY
 - DIGITALOCEAN_SPACES_SECRET
 - DIGITALOCEAN_SPACES_ENDPOINT
@@ -46,7 +46,12 @@ def _get_folder_for_source(source: str) -> str:
 
 
 class SpacesUploader:
-    """Upload files to DigitalOcean Spaces"""
+    """Upload files to DigitalOcean Spaces.
+
+    All data is stored in a single bucket with path prefixes:
+    - iradar/{source}/ - Radar output images
+    - iradar-data/ - Metadata, cache, transforms
+    """
 
     def __init__(self):
         """Initialize Spaces uploader with environment variables"""
@@ -82,7 +87,7 @@ class SpacesUploader:
         if missing_vars:
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}\n"
-                "Please set all DigitalOcean Spaces credentials in environment variables."
+                "Please set all DigitalOcean Spaces credentials in environment variables or .env file."
             )
 
         # Initialize boto3 client
@@ -103,15 +108,40 @@ class SpacesUploader:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             if error_code == "404":
-                raise ValueError(f"Bucket '{self.bucket}' not found") from e
+                raise ValueError(f"Bucket not found") from e
             elif error_code == "403":
-                raise ValueError(f"Access denied to bucket '{self.bucket}'") from e
+                raise ValueError(f"Access denied to bucket") from e
             else:
                 raise ValueError(
                     f"Failed to connect to DigitalOcean Spaces: {e}"
                 ) from e
 
-    def upload_file(self, local_path: Path, source: str, filename: str) -> str | None:
+    def _detect_content_type(self, path: Path) -> str:
+        """Detect MIME content type from file extension.
+
+        Args:
+            path: File path
+
+        Returns:
+            MIME type string
+        """
+        suffix = Path(path).suffix.lower()
+        return {
+            ".png": "image/png",
+            ".avif": "image/avif",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".json": "application/json",
+        }.get(suffix, "application/octet-stream")
+
+    def upload_file(
+        self,
+        local_path: Path,
+        source: str,
+        filename: str,
+        content_type: str | None = None,
+    ) -> str | None:
         """
         Upload a file to DigitalOcean Spaces
 
@@ -119,6 +149,7 @@ class SpacesUploader:
             local_path: Local file path to upload
             source: Source name ('dwd' for germany, 'shmu' for slovakia)
             filename: Filename to use in Spaces (e.g., '1234567890.png')
+            content_type: MIME type (auto-detected from extension if None)
 
         Returns:
             str: Public URL of uploaded file, or None if upload failed
@@ -128,6 +159,10 @@ class SpacesUploader:
         if not local_path.exists():
             logger.error(f"Local file not found: {local_path}")
             return None
+
+        # Auto-detect content type if not provided
+        if content_type is None:
+            content_type = self._detect_content_type(local_path)
 
         # Determine folder based on source using centralized registry
         folder = _get_folder_for_source(source)
@@ -141,7 +176,7 @@ class SpacesUploader:
                 str(local_path),
                 self.bucket,
                 s3_key,
-                ExtraArgs={"ACL": "public-read", "ContentType": "image/png"},
+                ExtraArgs={"ACL": "public-read", "ContentType": content_type},
             )
 
             # Construct public URL
@@ -202,6 +237,80 @@ class SpacesUploader:
         except Exception as e:
             logger.error(f"Unexpected error during metadata upload: {e}")
             return None
+
+    def download_metadata(self, s3_key: str, local_path: Path) -> bool:
+        """
+        Download a metadata file from Spaces to local path.
+
+        Uses atomic download with temp file to prevent corruption.
+
+        Args:
+            s3_key: Full S3 key (e.g., 'iradar-data/extent/dwd/extent_index.json')
+            local_path: Local file path to save to
+
+        Returns:
+            bool: True if download successful, False if not found or error
+        """
+        local_path = Path(local_path)
+        temp_path = local_path.with_suffix(local_path.suffix + ".tmp")
+
+        try:
+            # Create parent directories
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Download to temp file first (atomic approach)
+            self.s3_client.download_file(self.bucket, s3_key, str(temp_path))
+
+            # Atomic rename on success
+            temp_path.rename(local_path)
+
+            logger.info(
+                f"Downloaded metadata from Spaces: {s3_key}",
+                extra={"operation": "download"},
+            )
+            return True
+
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            if error_code == "404":
+                # Not found is expected for first run
+                logger.debug(f"Metadata not found in Spaces: {s3_key}")
+                return False
+            logger.warning(f"Error downloading metadata from Spaces: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error during metadata download: {e}")
+            return False
+        finally:
+            # Clean up temp file on failure
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+
+    def metadata_exists(self, s3_key: str) -> bool:
+        """
+        Check if a metadata file exists in Spaces.
+
+        Args:
+            s3_key: Full S3 key (e.g., 'iradar-data/extent/dwd/extent_index.json')
+
+        Returns:
+            bool: True if file exists, False otherwise
+        """
+        try:
+            self.s3_client.head_object(Bucket=self.bucket, Key=s3_key)
+            return True
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            if error_code == "404":
+                return False
+            logger.warning(f"Error checking metadata existence in Spaces: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error checking metadata existence: {e}")
+            return False
 
     def delete_file(self, source: str, filename: str) -> bool:
         """
@@ -311,3 +420,34 @@ def is_spaces_configured() -> bool:
     ]
 
     return all(os.getenv(var) for var in required_vars)
+
+
+# Cached uploader instance for reuse across calls
+_cached_uploader: SpacesUploader | None = None
+
+
+def get_uploader_if_configured() -> SpacesUploader | None:
+    """
+    Get a cached SpacesUploader instance if Spaces is configured.
+
+    Returns the same instance on subsequent calls to avoid repeated
+    initialization overhead (env var reads, boto3 client creation,
+    bucket validation).
+
+    Returns:
+        SpacesUploader instance or None if not configured
+    """
+    global _cached_uploader
+
+    if _cached_uploader is not None:
+        return _cached_uploader
+
+    if not is_spaces_configured():
+        return None
+
+    try:
+        _cached_uploader = SpacesUploader()
+        return _cached_uploader
+    except Exception as e:
+        logger.debug(f"Could not initialize SpacesUploader: {e}")
+        return None

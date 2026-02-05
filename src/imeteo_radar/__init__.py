@@ -9,7 +9,7 @@ __version__ = "1.4.0"
 __author__ = "Radar Processing Team"
 
 from .processing.animator import RadarAnimator
-from .processing.exporter import PNGExporter
+from .processing.exporter import ExportConfig, MultiFormatExporter, PNGExporter
 from .processing.merger import RadarMerger
 from .sources.arso import ARSORadarSource
 from .sources.chmi import CHMIRadarSource
@@ -28,6 +28,8 @@ __all__ = [
     "OMSZRadarSource",
     "IMGWRadarSource",
     "RadarMerger",
-    "PNGExporter",
+    "MultiFormatExporter",
+    "PNGExporter",  # Backward compatibility alias
+    "ExportConfig",
     "RadarAnimator",
 ]
