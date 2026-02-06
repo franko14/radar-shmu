@@ -15,6 +15,7 @@ alignment.
 import glob
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import h5py
@@ -477,6 +478,38 @@ def _get_target_dimensions_from_pngs(output_dir: str) -> tuple[int, int] | None:
     return None
 
 
+def _get_dimensions_from_transform_cache(source_name: str) -> tuple[int, int] | None:
+    """Get output dimensions from transform cache grid files.
+
+    The transform cache stores precomputed reprojection grids with dst_shape
+    containing the exact output dimensions used by the reprojection pipeline.
+
+    Args:
+        source_name: Source identifier (e.g., 'dwd', 'shmu')
+
+    Returns:
+        Tuple of (height, width) or None if not found
+    """
+    grid_dir = Path("/tmp/iradar-data/grid")
+    if not grid_dir.exists():
+        return None
+
+    # Find grid file for this source (format: {source}_{HxW}_{hash}_v1.npz)
+    for grid_file in grid_dir.glob(f"{source_name}_*.npz"):
+        try:
+            # Load just the dst_shape array
+            with np.load(grid_file, allow_pickle=False) as data:
+                if "dst_shape" in data:
+                    dst_shape = data["dst_shape"]
+                    # dst_shape is [height, width]
+                    return (int(dst_shape[0]), int(dst_shape[1]))
+        except Exception as e:
+            logger.debug(f"Error reading grid file {grid_file}: {e}")
+            continue
+
+    return None
+
+
 def generate_source_coverage_mask(
     source_name: str,
     output_dir: str | None = None,
@@ -487,9 +520,9 @@ def generate_source_coverage_mask(
     Generate a coverage mask PNG for a single radar source.
 
     Reads actual radar data and reprojects coverage directly into the target
-    grid defined by extent_index.json bounds + existing data PNG dimensions.
-    This guarantees pixel-perfect alignment because the mask occupies the
-    exact same pixel grid as the data PNGs.
+    grid defined by extent_index.json bounds. If existing data PNGs are available,
+    uses their dimensions for pixel-perfect alignment. Otherwise, gets dimensions
+    from the transform cache grid files.
 
     Mask is saved to /tmp/iradar-data/mask/{source}/ (canonical location).
 
@@ -542,14 +575,24 @@ def generate_source_coverage_mask(
         )
         return None
 
-    # Get target dimensions from existing radar PNGs
+    # Get target dimensions from existing radar PNGs or transform cache
     target_shape = _get_target_dimensions_from_pngs(png_dir)
     if target_shape is None:
-        logger.error(
-            f"No existing data PNGs in {png_dir} to determine target dimensions",
-            extra={"source": source_name},
-        )
-        return None
+        # No PNGs exist - get dimensions from transform cache grid
+        # The grid stores the exact output dimensions used by the reprojection pipeline
+        target_shape = _get_dimensions_from_transform_cache(source_name)
+        if target_shape:
+            logger.debug(
+                f"Got dimensions from transform cache: {target_shape[1]}x{target_shape[0]}",
+                extra={"source": source_name},
+            )
+        else:
+            logger.error(
+                f"No PNGs and no transform cache for {source_name}. "
+                "Run a fetch first to generate transform grids.",
+                extra={"source": source_name},
+            )
+            return None
 
     logger.debug(
         f"Target: {target_shape[1]}x{target_shape[0]} pixels, "
