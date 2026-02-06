@@ -1027,16 +1027,16 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
                     uploader=uploader,
                 )
 
-    # Auto-generate coverage masks if missing (first run)
+    # Auto-generate coverage masks if missing (first run or when masks don't exist)
     # - With --no-individual: Only generate composite mask
     # - Without --no-individual: Generate both individual and composite masks
-    if processed_count > 0:
-        _auto_generate_masks_if_missing(
-            source_names=list(sources.keys()),
-            args=args,
-            composite_output=output_dir,
-            include_individual=not args.no_individual,
-        )
+    # Always check for missing masks, not just when processed_count > 0
+    _auto_generate_masks_if_missing(
+        source_names=list(sources.keys()),
+        args=args,
+        composite_output=output_dir,
+        include_individual=not args.no_individual,
+    )
 
     # Log processing summary with skip reasons
     total_skipped = sum(len(v) for v in skip_reasons.values())
@@ -1302,6 +1302,73 @@ def _export_single_source(
         save_extent_index(source_name, extent_data, force=True, upload_to_s3=True)
 
 
+def _auto_generate_extent(source_name: str) -> bool:
+    """Auto-generate extent_index.json for a source by downloading radar data.
+
+    This is called when extent is missing during mask generation.
+    Downloads latest radar file, processes it to get extent, and saves to S3.
+
+    Args:
+        source_name: Source identifier (e.g., 'dwd', 'shmu')
+
+    Returns:
+        True if extent was generated, False otherwise
+    """
+    from datetime import datetime
+
+    from .config.sources import get_source_config, get_source_instance
+    from .utils.extent_loader import save_extent_index
+
+    logger.info(f"Auto-generating extent for {source_name}...")
+
+    try:
+        source = get_source_instance(source_name)
+        config = get_source_config(source_name)
+        product = config["product"] if config else "dmax"
+
+        # Download latest file
+        if source_name == "dwd":
+            files = source.download_latest(count=1, products=[product], use_latest=True)
+        else:
+            files = source.download_latest(count=1, products=[product])
+
+        if not files:
+            logger.warning(f"No data available for {source_name}")
+            return False
+
+        file_path = files[0]["path"]
+
+        # Process to get extent
+        radar_data = source.process_to_array(file_path)
+        extent = radar_data.get("extent", {})
+        wgs84 = extent.get("wgs84", {})
+
+        if not wgs84:
+            logger.warning(f"No extent in radar data for {source_name}")
+            return False
+
+        # Save extent
+        extent_data = {
+            "metadata": {
+                "title": f"{source_name.upper()} Radar Coverage",
+                "source": source_name,
+                "generated": datetime.now().isoformat() + "Z",
+            },
+            "wgs84": wgs84,
+        }
+        save_extent_index(source_name, extent_data, force=True, upload_to_s3=True)
+
+        # Clean up
+        source.cleanup_temp_files()
+
+        logger.info(f"Auto-generated extent for {source_name}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to auto-generate extent for {source_name}: {e}")
+        return False
+
+
 def _auto_generate_masks_if_missing(
     source_names: list[str],
     args,
@@ -1313,6 +1380,11 @@ def _auto_generate_masks_if_missing(
     Checks for missing masks and generates them from extent data.
     First tries to download from S3, then generates if not found anywhere.
     This eliminates the need for a separate `imeteo-radar coverage-mask` command.
+
+    IMPORTANT: Individual masks are ALWAYS generated if composite mask is missing,
+    regardless of include_individual flag. This is because composite mask generation
+    depends on individual masks to merge them together. Without individual masks,
+    the composite would be all gray (no coverage data).
 
     Args:
         source_names: List of ALL source identifiers to check (not just available)
@@ -1329,18 +1401,27 @@ def _auto_generate_masks_if_missing(
 
     any_generated = False
 
-    # Check individual source masks (only if include_individual=True)
-    if include_individual:
+    # Check if composite mask exists - if not, we MUST generate individual masks
+    # regardless of include_individual flag, because composite mask depends on them
+    composite_mask_missing = not ensure_mask_exists("composite")
+    need_individual_masks = include_individual or composite_mask_missing
+
+    # Check individual source masks
+    if need_individual_masks:
         for source_name in source_names:
             # Try S3 first, then check local
             if ensure_mask_exists(source_name):
                 continue  # Already exists (local or downloaded from S3)
 
             # Not in S3, need to generate
-            # Ensure extent is available first
+            # First, ensure extent is available (generate if missing)
             if not ensure_extent_exists(source_name):
-                logger.debug(f"No extent for {source_name}, skipping mask generation")
-                continue
+                # Extent missing - try to generate from radar data
+                try:
+                    _auto_generate_extent(source_name)
+                except Exception as e:
+                    logger.debug(f"Could not auto-generate extent for {source_name}: {e}")
+                    continue
 
             # Resolve the actual PNG directory (sibling of composite dir)
             png_dir = _get_individual_source_dir(source_name, composite_output)
@@ -1696,16 +1777,16 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
                 uploader=uploader,
             )
 
-    # Auto-generate coverage masks if missing (first run)
+    # Auto-generate coverage masks if missing (first run or when masks don't exist)
     # - With --no-individual: Only generate composite mask
     # - Without --no-individual: Generate both individual and composite masks
-    if processed_count > 0:
-        _auto_generate_masks_if_missing(
-            source_names=list(sources.keys()),
-            args=args,
-            composite_output=output_dir,
-            include_individual=not args.no_individual,
-        )
+    # Always check for missing masks, not just when processed_count > 0
+    _auto_generate_masks_if_missing(
+        source_names=list(sources.keys()),
+        args=args,
+        composite_output=output_dir,
+        include_individual=not args.no_individual,
+    )
 
     return 0
 
