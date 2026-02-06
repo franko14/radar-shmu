@@ -31,10 +31,10 @@ while true; do
 
     # Run composite with backload
     imeteo-radar composite \
-        --formats png \
-        --resolutions full \
+        --formats png,avif \
+        --resolutions full,1000 \
+        --update-extent \
         --avif-quality 50 \
-        --no-individual \
         --output ./outputs/composite \
         2>&1
 
