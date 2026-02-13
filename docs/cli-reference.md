@@ -66,6 +66,8 @@ imeteo-radar fetch [OPTIONS]
 | `--resolutions` | string | `full` | Comma-separated: `full` for native, or meters (e.g., `full,1000,2000`) |
 | `--formats` | string | `png` | Comma-separated: `png`, `avif`, or both |
 | `--avif-quality` | int | `50` | AVIF quality 1-100 (lower = smaller file) |
+| `--avif-speed` | int | `6` | AVIF encoding speed 0-10 (higher = faster, lower quality). Use 8+ for CPU-constrained environments |
+| `--avif-codec` | `auto\|aom\|svt\|rav1e` | `auto` | AVIF codec. `svt` (SVT-AV1) is faster on multi-core |
 | `--cache-dir` | path | `/tmp/iradar-data/data` | Directory for processed data cache |
 | `--cache-ttl` | int | `60` | Cache TTL in minutes |
 | `--no-cache` | flag | - | Disable caching entirely |
@@ -156,6 +158,8 @@ imeteo-radar composite [OPTIONS]
 | `--resolutions` | string | `full` | Comma-separated export resolutions: `full` or meters (e.g., `full,1000,2000`) |
 | `--formats` | string | `png` | Comma-separated output formats: `png`, `avif`, or both |
 | `--avif-quality` | int | `50` | AVIF quality 1-100 (lower = smaller file) |
+| `--avif-speed` | int | `6` | AVIF encoding speed 0-10 (higher = faster, lower quality). Use 8+ for CPU-constrained environments |
+| `--avif-codec` | `auto\|aom\|svt\|rav1e` | `auto` | AVIF codec. `svt` (SVT-AV1) is faster on multi-core |
 | `--cache-dir` | path | `/tmp/iradar-data/data` | Directory for processed data cache |
 | `--cache-ttl` | int | `60` | Cache TTL in minutes |
 | `--no-cache` | flag | - | Disable caching entirely |
@@ -195,6 +199,12 @@ imeteo-radar composite --formats png,avif --resolutions full,1000,2000
 
 # AVIF only for bandwidth optimization
 imeteo-radar composite --formats avif --resolutions 1000,2000 --avif-quality 45
+
+# Fast AVIF encoding for CPU-constrained pods (500m CPU)
+imeteo-radar composite --formats png,avif --avif-speed 8 --resolutions full,2000
+
+# Use SVT-AV1 codec for faster encoding (if available in container)
+imeteo-radar composite --formats png,avif --avif-speed 8 --avif-codec svt --resolutions full,2000
 ```
 
 ### How It Works

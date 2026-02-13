@@ -141,6 +141,20 @@ def create_parser() -> argparse.ArgumentParser:
         default=50,
         help="AVIF quality (1-100). Lower = smaller files. Default: 50 (optimized for radar images).",
     )
+    fetch_parser.add_argument(
+        "--avif-speed",
+        type=int,
+        default=6,
+        help="AVIF encoding speed (0-10). Higher = faster but lower quality. "
+        "Default: 6. Use 8+ for CPU-constrained environments.",
+    )
+    fetch_parser.add_argument(
+        "--avif-codec",
+        type=str,
+        choices=["auto", "aom", "svt", "rav1e"],
+        default="auto",
+        help="AVIF codec. 'auto' lets Pillow decide, 'svt' is faster on multi-core. Default: auto.",
+    )
 
     # Extent command - generate extent information only
     extent_parser = subparsers.add_parser(
@@ -291,6 +305,20 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="AVIF quality (1-100). Lower = smaller files. Default: 50 (optimized for radar images).",
+    )
+    composite_parser.add_argument(
+        "--avif-speed",
+        type=int,
+        default=6,
+        help="AVIF encoding speed (0-10). Higher = faster but lower quality. "
+        "Default: 6. Use 8+ for CPU-constrained environments.",
+    )
+    composite_parser.add_argument(
+        "--avif-codec",
+        type=str,
+        choices=["auto", "aom", "svt", "rav1e"],
+        default="auto",
+        help="AVIF codec. 'auto' lets Pillow decide, 'svt' is faster on multi-core. Default: auto.",
     )
 
     # Cache management command
@@ -577,15 +605,18 @@ def parse_export_config(args):
     if not formats:
         formats = ["png"]  # Fallback to PNG if invalid
 
-    # AVIF quality
+    # AVIF options
     avif_quality = getattr(args, "avif_quality", 50)
+    avif_speed = getattr(args, "avif_speed", 6)
+    avif_codec = getattr(args, "avif_codec", "auto")
 
     return ExportConfig(
         resolutions_m=resolutions_m,
         include_full=include_full,
         formats=formats,
         avif_quality=avif_quality,
-        avif_speed=4,  # Slightly slower for better compression
+        avif_speed=avif_speed,
+        avif_codec=avif_codec,
     )
 
 

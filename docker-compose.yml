@@ -162,3 +162,7 @@ networks:
 #
 # Clean up everything including volumes:
 #   docker-compose --profile production down -v
+#
+# Benchmark AVIF encoding under production constraints:
+#   ./scripts/benchmark_avif.sh
+#   AVIF_SPEED=4 ./scripts/benchmark_avif.sh

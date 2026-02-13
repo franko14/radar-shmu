@@ -30,14 +30,18 @@ class ExportConfig:
         formats: List of output formats. Supported: "png", "avif"
         avif_quality: AVIF quality (1-100, higher = better quality, larger file).
             Default 50 is optimized for radar images with limited color palette.
-        avif_speed: AVIF encoding speed (0-10, higher = faster, lower quality)
+        avif_speed: AVIF encoding speed (0-10, higher = faster, lower quality).
+            Default 6 (Pillow default). Use 8+ for CPU-constrained environments.
+        avif_codec: AVIF codec to use. "auto" lets Pillow decide, or specify
+            "aom", "svt", "rav1e". SVT-AV1 is significantly faster on multi-core.
     """
 
     resolutions_m: list[float] = field(default_factory=list)
     include_full: bool = True
     formats: list[str] = field(default_factory=lambda: ["png"])
     avif_quality: int = 50
-    avif_speed: int = 4
+    avif_speed: int = 6
+    avif_codec: str = "auto"
 
 
 # Source native resolutions in meters (approximate)
@@ -291,6 +295,7 @@ class MultiFormatExporter:
         output_path: Path,
         quality: int = 85,
         speed: int = 6,
+        codec: str = "auto",
     ) -> None:
         """Save RGBA array as AVIF.
 
@@ -299,9 +304,27 @@ class MultiFormatExporter:
             output_path: Path to save AVIF file
             quality: AVIF quality (1-100)
             speed: Encoding speed (0-10, higher = faster)
+            codec: AVIF codec ("auto", "aom", "svt", "rav1e")
         """
+        import time as _time
+
+        h, w = rgba_data.shape[:2]
+        logger.info(
+            f"AVIF encode start: {w}x{h}, quality={quality}, speed={speed}, codec={codec}"
+        )
+        t0 = _time.monotonic()
+
         img = Image.fromarray(rgba_data, mode="RGBA")
-        img.save(output_path, format="AVIF", quality=quality, speed=speed)
+        save_kwargs = {"format": "AVIF", "quality": quality, "speed": speed}
+        if codec != "auto":
+            save_kwargs["codec"] = codec
+        img.save(output_path, **save_kwargs)
+
+        elapsed = _time.monotonic() - t0
+        file_size_kb = output_path.stat().st_size / 1024
+        logger.info(
+            f"AVIF encode done: {w}x{h} in {elapsed:.1f}s ({file_size_kb:.0f} KB)"
+        )
 
     def _calculate_scaled_dimensions(
         self,
@@ -524,6 +547,7 @@ class MultiFormatExporter:
                             output_path,
                             config.avif_quality,
                             config.avif_speed,
+                            config.avif_codec,
                         )
 
                     metadata = {
@@ -558,6 +582,7 @@ class MultiFormatExporter:
                             output_path,
                             config.avif_quality,
                             config.avif_speed,
+                            config.avif_codec,
                         )
 
                     metadata = {
