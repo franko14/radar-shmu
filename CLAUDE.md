@@ -87,6 +87,54 @@ imeteo-radar --help
 | Development setup | [docs/development.md](docs/development.md) |
 | Monitoring & debugging | [docs/monitoring.md](docs/monitoring.md) |
 
+## Git Workflow (MANDATORY)
+
+This project uses git-flow. All agents and contributors MUST follow these rules.
+
+### Branch Naming
+
+| Prefix | Purpose | Example |
+|--------|---------|---------|
+| `feature/` | New functionality | `feature/arso-source` |
+| `fix/` | Bug fixes | `fix/dwd-timeout` |
+| `chore/` | Maintenance, CI, deps | `chore/optimize-ci` |
+| `release/` | Version bumps, changelog | `release/v2.9.0` |
+| `hotfix/` | Urgent production fixes | `hotfix/composite-crash` |
+
+### Rules
+
+1. **Never commit directly to `main`** — always use a feature branch + PR
+2. **Branch names must use a prefix** from the table above — enforced by local git hooks
+3. **One PR per concern** — don't mix features with fixes or chores
+4. **Squash merge** PRs into main to keep history clean
+5. **Tag releases** on main after merge: `git tag v2.X.Y && git push origin v2.X.Y`
+6. **Delete branches** after merge — keep only `main` and active work branches
+
+### Release Process
+
+```bash
+# 1. Create branch
+git checkout -b release/v2.9.0
+
+# 2. Bump version in pyproject.toml, update CHANGELOG.md, commit
+
+# 3. Push and create PR
+git push -u origin release/v2.9.0
+gh pr create --title "release: v2.9.0"
+
+# 4. After merge, tag and push
+git checkout main && git pull
+git tag v2.9.0 && git push origin v2.9.0
+
+# 5. CI builds and pushes Docker image automatically (tag push only)
+```
+
+### CI/CD
+
+- **PR**: validate job (build only, no push, amd64)
+- **Tag push** (`v*`): build-and-push job (amd64, pushes to DockerHub)
+- **Main push**: no build — tag push is the only trigger for releases
+
 ## Code Quality
 
 ```bash

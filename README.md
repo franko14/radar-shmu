@@ -128,3 +128,25 @@ MIT
 ## Contributing
 
 Contributions welcome! See [docs/development.md](docs/development.md) for setup instructions.
+
+### Git Workflow
+
+This project uses git-flow with enforced branch naming:
+
+```bash
+feature/*   # New functionality
+fix/*       # Bug fixes
+chore/*     # Maintenance, CI, deps
+release/*   # Version bumps, changelog
+hotfix/*    # Urgent production fixes
+```
+
+- Never commit directly to `main` — use feature branches + PRs
+- Squash merge into main
+- Tag releases: `git tag v2.X.Y && git push origin v2.X.Y`
+
+Install local git hooks after cloning:
+
+```bash
+cp scripts/hooks/* .git/hooks/ && chmod +x .git/hooks/*
+```
