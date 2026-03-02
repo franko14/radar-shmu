@@ -5,6 +5,22 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.1] - 2026-03-02
+
+### Fixed
+- **DWD timeout no longer crashes entire composite process** — Added try/except around
+  `_get_available_timestamps_from_server()` in `dwd.py` so Strategy 2 (timestamp probing)
+  is reached when the directory listing fails after retries
+- **Per-source failures no longer terminate composite generation** — Added try/except around
+  `source.get_available_timestamps()` in `cli_composite.py` so remaining sources continue
+  processing when one source is unreachable. Existing outage detection and `min_core_sources`
+  logic now properly activates.
+
+### Added
+- **DWD connectivity diagnostics** — Logs DNS resolution, TCP connection, and TLS handshake
+  timing before each DWD directory listing request, providing visibility into persistent
+  connection failures in production
+
 ## [2.6.0] - 2026-02-05
 
 ### Added
