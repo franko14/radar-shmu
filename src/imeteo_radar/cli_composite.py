@@ -563,10 +563,17 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
             cached_ts_set = set(cache.get_available_timestamps(source_name, product))
 
         # Get available timestamps from provider (without downloading yet)
-        available_timestamps = source.get_available_timestamps(
-            count=reprocess_count + 2,
-            products=[product],
-        )
+        try:
+            available_timestamps = source.get_available_timestamps(
+                count=reprocess_count + 2,
+                products=[product],
+            )
+        except Exception as e:
+            logger.warning(
+                f"{source_name.upper()}: Failed to get timestamps: {e}"
+            )
+            all_source_files[source_name] = []
+            continue
 
         if not available_timestamps:
             logger.warning(

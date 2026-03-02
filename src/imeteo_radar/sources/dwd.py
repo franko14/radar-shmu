@@ -6,7 +6,10 @@ Handles downloading and processing of DWD radar composite data.
 """
 
 import os
+import socket
+import ssl
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -107,6 +110,30 @@ class DWDRadarSource(RadarSource):
 
         directory_url = f"{self.base_url}/{product}/"
         logger.debug(f"Fetching DWD directory: {directory_url}")
+
+        # Diagnostic: log DNS + TCP + TLS timing to debug persistent failures
+        host = "opendata.dwd.de"
+        try:
+            dns_start = time.monotonic()
+            addrs = socket.getaddrinfo(host, 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            dns_ms = (time.monotonic() - dns_start) * 1000
+            ips = [addr[4][0] for addr in addrs]
+            logger.info(f"DWD DNS: {host} -> {ips} ({dns_ms:.0f}ms)")
+
+            tcp_start = time.monotonic()
+            sock = socket.create_connection((ips[0], 443), timeout=10)
+            tcp_ms = (time.monotonic() - tcp_start) * 1000
+            logger.info(f"DWD TCP: {ips[0]}:443 connected ({tcp_ms:.0f}ms)")
+
+            tls_start = time.monotonic()
+            ctx = ssl.create_default_context()
+            ssock = ctx.wrap_socket(sock, server_hostname=host)
+            tls_ms = (time.monotonic() - tls_start) * 1000
+            logger.info(f"DWD TLS: {ssock.version()} handshake ({tls_ms:.0f}ms)")
+            ssock.close()
+        except Exception as diag_err:
+            logger.warning(f"DWD connectivity diagnostic failed: {diag_err}")
+
         response = requests.get(directory_url, timeout=15)
         response.raise_for_status()
 
@@ -281,7 +308,11 @@ class DWDRadarSource(RadarSource):
         # Strategy 1: Try parsing directory listing first (most reliable)
         available_timestamps = []
         for product in products:
-            server_timestamps = self._get_available_timestamps_from_server(product)
+            try:
+                server_timestamps = self._get_available_timestamps_from_server(product)
+            except Exception as e:
+                logger.warning(f"DWD directory listing failed for {product}: {e}")
+                server_timestamps = []
             if server_timestamps:
                 # Filter by time range if specified
                 if start_time and end_time:
