@@ -5,6 +5,7 @@ Base classes for radar data sources
 
 import os
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -42,6 +43,8 @@ class RadarSource(ABC):
         self,
         count: int = 8,
         products: list[str] = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
     ) -> list[str]:
         """Get list of available timestamps from provider WITHOUT downloading.
 
@@ -51,6 +54,8 @@ class RadarSource(ABC):
         Args:
             count: Maximum number of timestamps to return
             products: List of products to check
+            start_time: Optional start time for filtering
+            end_time: Optional end time for filtering
 
         Returns:
             List of timestamp strings (e.g., ["20260128135000", "20260128134500"])

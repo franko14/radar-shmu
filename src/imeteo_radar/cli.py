@@ -626,7 +626,7 @@ def fetch_command(args) -> int:
     # Import here to avoid circular imports and speed up CLI startup
     try:
         from .config.sources import get_source_config, get_source_instance
-        from .processing.exporter import ExportConfig, MultiFormatExporter
+        from .processing.exporter import MultiFormatExporter
         from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 
         # Initialize source using centralized registry
@@ -698,6 +698,7 @@ def fetch_command(args) -> int:
         if args.backload:
             # Handle backload
             start, end = parse_time_range(args.from_time, args.to_time, args.hours)
+            from .utils.cli_helpers import output_exists
 
             logger.info(
                 f"Backload period: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%Y-%m-%d %H:%M')}"
@@ -712,22 +713,56 @@ def fetch_command(args) -> int:
 
             logger.info(f"Downloading up to {intervals} timestamps...")
 
-            # Download data (don't use LATEST for backload)
-            if args.source == "dwd":
-                files = source.download_latest(
-                    count=intervals,
-                    products=[product],
-                    use_latest=False,
-                    start_time=start,
-                    end_time=end,
-                )
-            else:  # SHMU
-                files = source.download_latest(
-                    count=intervals, products=[product], start_time=start, end_time=end
+            # Get available timestamps first, then filter out already-processed ones
+            available_timestamps = source.get_available_timestamps(
+                count=intervals,
+                products=[product],
+                start_time=start,
+                end_time=end,
+            )
+
+            if not available_timestamps:
+                logger.error("No data available for the specified period")
+                return 1
+
+            # Filter out timestamps whose output already exists (local or S3)
+            timestamps_to_download = []
+            skipped_existing = 0
+            for ts in available_timestamps:
+                try:
+                    dt = parse_timestamp_to_datetime(ts, args.source)
+                except (ValueError, IndexError):
+                    logger.debug(f"Skipping malformed timestamp: {ts}")
+                    continue
+                unix_timestamp = int(dt.timestamp())
+                filename = f"{unix_timestamp}.png"
+                output_path = output_dir / filename
+
+                if output_exists(
+                    output_path,
+                    args.source,
+                    filename,
+                    uploader if upload_enabled else None,
+                ):
+                    skipped_existing += 1
+                else:
+                    timestamps_to_download.append(ts)
+
+            if skipped_existing > 0:
+                logger.info(
+                    f"Skipped {skipped_existing} already-processed timestamps, "
+                    f"{len(timestamps_to_download)} to download"
                 )
 
+            if not timestamps_to_download:
+                logger.info("All timestamps already processed, nothing to do")
+                return 0
+
+            # Download only missing timestamps
+            files = source.download_timestamps(timestamps_to_download, [product])
+
             if not files:
-                logger.error("No data available for the specified period")
+                logger.error("Failed to download any files")
                 return 1
 
             logger.info(f"Downloaded {len(files)} files", extra={"count": len(files)})
@@ -770,17 +805,15 @@ def fetch_command(args) -> int:
 
                     # Upload all variants to DigitalOcean Spaces if enabled
                     if upload_enabled and uploader:
-                        for variant_name, (variant_path, _) in variants.items():
+                        for _variant_name, (variant_path, _) in variants.items():
                             uploader.upload_file(
                                 variant_path, args.source, variant_path.name
                             )
 
-                    # Clean up matplotlib and numpy memory after each file
+                    # Free large arrays and collect garbage after each file
                     import gc
 
-                    import matplotlib.pyplot as plt
-
-                    plt.close("all")
+                    del radar_data
                     gc.collect()
 
                 except Exception as e:
@@ -803,8 +836,6 @@ def fetch_command(args) -> int:
             # Fetch multiple recent timestamps with cache awareness
             # This handles irregular provider uploads by checking multiple timestamps
             import gc
-
-            import matplotlib.pyplot as plt
 
             from .utils.cli_helpers import init_cache_from_args, output_exists
             from .utils.timestamps import is_timestamp_in_cache
@@ -910,13 +941,12 @@ def fetch_command(args) -> int:
 
                     # Upload all variants to DigitalOcean Spaces if enabled
                     if upload_enabled and uploader:
-                        for variant_name, (variant_path, _) in variants.items():
+                        for _variant_name, (variant_path, _) in variants.items():
                             uploader.upload_file(
                                 variant_path, args.source, variant_path.name
                             )
 
                     # Clean up memory
-                    plt.close("all")
                     del radar_data
                     gc.collect()
 
@@ -969,13 +999,12 @@ def fetch_command(args) -> int:
                     processed_count += 1
 
                     if upload_enabled and uploader:
-                        for variant_name, (variant_path, _) in variants.items():
+                        for _variant_name, (variant_path, _) in variants.items():
                             uploader.upload_file(
                                 variant_path, args.source, variant_path.name
                             )
 
                     # Clean up memory
-                    plt.close("all")
                     del radar_data
                     gc.collect()
 
