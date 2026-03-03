@@ -6,6 +6,7 @@ Exports radar data as transparent PNG and AVIF overlays with consistent colorsca
 Supports multiple resolutions and formats per timestamp.
 """
 
+import gc
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -510,19 +511,25 @@ class MultiFormatExporter:
                 data, cmap_name, transparent_background
             )
 
+            # Extract values needed for metadata, then free the large float32 array (~96 MB)
+            data_shape = data.shape
+            data_range = [float(np.nanmin(data)), float(np.nanmax(data))]
+            del data
+            gc.collect()
+
             # Get WGS84 bounds for scaling calculations
             wgs84_extent = output_extent.get("wgs84", extent.get("wgs84", {}))
             source_name = radar_data.get("metadata", {}).get("source", "").lower()
 
             # Build base metadata
             base_metadata = {
-                "dimensions": data.shape,
+                "dimensions": data_shape,
                 "extent": wgs84_extent,
                 "extent_reference": "config/extent_index.json",
                 "source": source_name or "unknown",
                 "colormap": cmap_name,
                 "units": lut_info["units"],
-                "data_range": [float(np.nanmin(data)), float(np.nanmax(data))],
+                "data_range": data_range,
                 "valid_pixels": int(np.sum(valid_mask)),
                 "used_cached_transform": used_cache,
                 "transparent": transparent_background,
@@ -563,7 +570,7 @@ class MultiFormatExporter:
             # Export scaled variants
             for target_res in config.resolutions_m:
                 scaled_dims = self._calculate_scaled_dimensions(
-                    data.shape, wgs84_extent, target_res, source_name
+                    data_shape, wgs84_extent, target_res, source_name
                 )
                 scaled_rgba = self._resize_rgba(rgba_data, scaled_dims)
 
@@ -595,6 +602,10 @@ class MultiFormatExporter:
                     }
                     variants[variant_name] = (output_path, metadata)
                     logger.info(f"Saved: {output_path}")
+
+            # Free full-res RGBA array after all variants are saved (~96 MB)
+            del rgba_data
+            gc.collect()
 
             return variants
 

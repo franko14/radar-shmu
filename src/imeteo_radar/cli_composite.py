@@ -511,10 +511,13 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
     ensure_mask_exists("composite")
 
     # Ensure transform grids are synced with S3 (download missing, upload local-only)
-    from .processing.transform_cache import TransformCache
+    # Skip when --no-individual: transform cache is only used for individual source exports,
+    # the compositor uses rasterio.warp.reproject() directly
+    if not args.no_individual:
+        from .processing.transform_cache import TransformCache
 
-    transform_cache = TransformCache()
-    transform_cache.sync_with_s3()
+        transform_cache = TransformCache()
+        transform_cache.sync_with_s3()
 
     # ========== STEP 1: DOWNLOAD DATA FROM ALL SOURCES ==========
     logger.info("Downloading data from all sources...")
@@ -1008,7 +1011,6 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
             processed_count += 1
             last_composite = {
                 "extent": {"wgs84": composite["extent"]},
-                "data": composite["data"],
             }
 
             compositor.clear_cache()
@@ -1242,8 +1244,6 @@ def _export_single_source(
         args: CLI arguments
         uploader: Optional SpacesUploader instance for uploading to DO Spaces
     """
-    import json
-
     # Get output directory (sibling of composite dir)
     composite_output = Path(args.output)
     output_dir = _get_individual_source_dir(source_name, composite_output)
@@ -1755,7 +1755,6 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
             processed_count += 1
             last_composite = {
                 "extent": {"wgs84": composite["extent"]},
-                "data": composite["data"],
             }
 
             # Cleanup
