@@ -1,15 +1,43 @@
 #!/bin/sh
-# Enforce git-flow branch naming convention on push
-# Allowed: main, feature/*, fix/*, chore/*, release/*, hotfix/*
+# Enforce git-flow: block direct pushes to main AND validate branch names.
+#
+# Pre-push receives lines on stdin:  <local ref> <local sha> <remote ref> <remote sha>
+# We reject any push targeting refs/heads/main but allow tag pushes (refs/tags/*).
 
+# --- Block direct pushes to main ---
+rejected=0
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo ""
+    echo "ERROR: Direct push to main is blocked."
+    echo ""
+    echo "Use a feature branch + PR instead:"
+    echo "  git checkout -b feature/<name>"
+    echo "  git push -u origin feature/<name>"
+    echo "  gh pr create"
+    echo ""
+    rejected=1
+  fi
+done
+
+if [ "$rejected" -eq 1 ]; then
+  exit 1
+fi
+
+# --- Validate branch name prefix ---
 branch=$(git symbolic-ref --short HEAD 2>/dev/null)
 
-# Allow main (for merges and tags)
+# Detached HEAD (e.g. tag push) — allow
+if [ -z "$branch" ]; then
+  exit 0
+fi
+
+# Allow main (we already blocked pushing to remote main above,
+# so reaching here means the remote ref is NOT main — e.g. tags)
 if [ "$branch" = "main" ]; then
   exit 0
 fi
 
-# Validate branch name prefix
 case "$branch" in
   feature/*|fix/*|chore/*|release/*|hotfix/*)
     exit 0

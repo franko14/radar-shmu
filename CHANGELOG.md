@@ -5,6 +5,30 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.3] - 2026-03-03
+
+### Fixed
+- **Reduced peak memory usage** by ~200-300 MB in composite pipeline — free float32/RGBA
+  arrays after rendering, remove composite data reference from last_composite dict
+- **Deduplicated backload downloads** — check output_exists before downloading, reducing
+  DWD requests from ~144/hour to ~12/hour
+- **Malformed DWD timestamps** handled gracefully instead of crashing
+
+### Changed
+- Skip transform cache S3 sync when `--no-individual` (saves I/O)
+- Add `start_time`/`end_time` to `RadarSource` base class signature
+
+## [2.8.2] - 2026-03-02
+
+### Changed
+- **Optimized CI pipeline** — drop arm64 cross-compilation via QEMU (not used in production)
+- Trigger build-and-push only on tag push (not main push), eliminating duplicate builds
+- Switch from registry-based cache to GHA cache (faster for single-platform)
+- Bump build-push-action from v5 to v6
+- Drop unused `main-{sha}` Docker tag
+
+Before: 3 runs per release (~30 min total). After: 2 runs (~9 min total).
+
 ## [2.8.1] - 2026-03-02
 
 ### Fixed
