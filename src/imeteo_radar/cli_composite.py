@@ -560,6 +560,15 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
 
     # Download fresh data from each source, SKIPPING cached timestamps
     for source_name, (source, product) in sources.items():
+        try:
+            source.check_connectivity()
+        except ConnectionError as e:
+            logger.warning(
+                f"{source_name.upper()}: Server unreachable, skipping: {e}"
+            )
+            all_source_files[source_name] = []
+            continue
+
         # Get cached timestamps for this source
         cached_ts_set = set()
         if cache:

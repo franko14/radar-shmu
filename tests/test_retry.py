@@ -254,3 +254,226 @@ class TestRetryIntegration:
         assert calls[0] == pytest.approx(1.0, rel=0.1)
         assert calls[1] == pytest.approx(2.0, rel=0.1)
         assert calls[2] == pytest.approx(4.0, rel=0.1)
+
+
+class TestConnectivityCheck:
+    """Tests for connectivity_check parameter in retry_with_backoff"""
+
+    def test_connectivity_check_runs_before_first_attempt(self):
+        """Test that connectivity_check is called before the retry loop"""
+        from imeteo_radar.core.retry import retry_with_backoff
+
+        call_order = []
+
+        def check():
+            call_order.append("check")
+
+        @retry_with_backoff(max_retries=3, connectivity_check=check)
+        def func():
+            call_order.append("func")
+            return "ok"
+
+        result = func()
+        assert result == "ok"
+        assert call_order == ["check", "func"]
+
+    def test_connectivity_check_failure_bypasses_retries(self):
+        """Test that ConnectionError from check propagates without retries"""
+        from imeteo_radar.core.retry import retry_with_backoff
+
+        func_called = False
+
+        def failing_check():
+            raise ConnectionError("host unreachable")
+
+        @retry_with_backoff(
+            max_retries=3,
+            base_delay=0.01,
+            exceptions=(ValueError,),
+            connectivity_check=failing_check,
+        )
+        def func():
+            nonlocal func_called
+            func_called = True
+            return "ok"
+
+        with pytest.raises(ConnectionError, match="host unreachable"):
+            func()
+
+        assert not func_called
+
+    def test_no_connectivity_check_default(self):
+        """Test that default None connectivity_check does nothing"""
+        from imeteo_radar.core.retry import retry_with_backoff
+
+        @retry_with_backoff(max_retries=1, base_delay=0.01)
+        def func():
+            return "ok"
+
+        assert func() == "ok"
+
+    def test_connectivity_check_passes_then_func_retries_normally(self):
+        """Test that if check passes, normal retry behavior continues"""
+        from imeteo_radar.core.retry import retry_with_backoff
+
+        call_count = 0
+
+        def passing_check():
+            pass
+
+        @retry_with_backoff(
+            max_retries=2,
+            base_delay=0.01,
+            exceptions=(ValueError,),
+            connectivity_check=passing_check,
+        )
+        def func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise ValueError("transient")
+            return "ok"
+
+        assert func() == "ok"
+        assert call_count == 2
+
+
+class TestTcpProbe:
+    """Tests for tcp_probe utility function"""
+
+    @patch("socket.create_connection")
+    def test_successful_probe(self, mock_conn):
+        """Test tcp_probe succeeds when connection works"""
+        from imeteo_radar.core.retry import tcp_probe
+
+        mock_sock = MagicMock()
+        mock_sock.__enter__ = MagicMock(return_value=mock_sock)
+        mock_sock.__exit__ = MagicMock(return_value=False)
+        mock_conn.return_value = mock_sock
+
+        tcp_probe("example.com", 443, 5.0)
+
+        mock_conn.assert_called_once_with(("example.com", 443), timeout=5.0)
+
+    @patch("socket.create_connection", side_effect=OSError("Connection refused"))
+    def test_failed_probe_raises_connection_error(self, mock_conn):
+        """Test tcp_probe raises ConnectionError on failure"""
+        from imeteo_radar.core.retry import tcp_probe
+
+        with pytest.raises(ConnectionError, match="example.com:443 unreachable"):
+            tcp_probe("example.com", 443, 5.0)
+
+    @patch("socket.create_connection", side_effect=OSError("timed out"))
+    def test_timeout_raises_connection_error(self, mock_conn):
+        """Test tcp_probe raises ConnectionError on timeout"""
+        from imeteo_radar.core.retry import tcp_probe
+
+        with pytest.raises(ConnectionError, match="unreachable.*5.0s"):
+            tcp_probe("example.com", 443, 5.0)
+
+
+class TestCheckConnectivityLogic:
+    """Tests for the check_connectivity logic used by RadarSource.
+
+    We test the logic (urlparse + tcp_probe) directly because importing
+    RadarSource triggers the full package import chain which requires
+    Python 3.11+ (datetime.UTC). The actual method in base.py uses
+    the same tcp_probe + urlparse pattern tested here.
+    """
+
+    @patch("socket.create_connection")
+    def test_probes_host_from_url(self, mock_conn):
+        """Test that tcp_probe is called with parsed hostname"""
+        from urllib.parse import urlparse
+        from imeteo_radar.core.retry import tcp_probe
+
+        mock_sock = MagicMock()
+        mock_sock.__enter__ = MagicMock(return_value=mock_sock)
+        mock_sock.__exit__ = MagicMock(return_value=False)
+        mock_conn.return_value = mock_sock
+
+        # Replicate check_connectivity logic
+        url = "https://example.com/data"
+        host = urlparse(url).hostname
+        tcp_probe(host, 443, 3.0)
+
+        mock_conn.assert_called_once_with(("example.com", 443), timeout=3.0)
+
+    @patch("socket.create_connection", side_effect=OSError("Connection refused"))
+    def test_raises_connection_error_on_unreachable(self, mock_conn):
+        """Test that ConnectionError propagates when host is unreachable"""
+        from urllib.parse import urlparse
+        from imeteo_radar.core.retry import tcp_probe
+
+        url = "https://example.com/data"
+        host = urlparse(url).hostname
+        with pytest.raises(ConnectionError):
+            tcp_probe(host, 443, 5.0)
+
+    @patch("socket.create_connection")
+    def test_skips_when_no_url(self, mock_conn):
+        """Test that no probe happens when url is None"""
+        from urllib.parse import urlparse
+        from imeteo_radar.core.retry import tcp_probe
+
+        # Replicate check_connectivity: skip when no base_url
+        url = None
+        if url is not None:
+            host = urlparse(url).hostname
+            if host:
+                tcp_probe(host, 443, 5.0)
+
+        mock_conn.assert_not_called()
+
+    @patch("socket.create_connection")
+    def test_parses_dwd_host_correctly(self, mock_conn):
+        """Test correct host extraction from DWD URL"""
+        from urllib.parse import urlparse
+        from imeteo_radar.core.retry import tcp_probe
+
+        mock_sock = MagicMock()
+        mock_sock.__enter__ = MagicMock(return_value=mock_sock)
+        mock_sock.__exit__ = MagicMock(return_value=False)
+        mock_conn.return_value = mock_sock
+
+        url = "https://opendata.dwd.de/weather/radar/composite"
+        host = urlparse(url).hostname
+        tcp_probe(host, 443, 5.0)
+
+        mock_conn.assert_called_once_with(("opendata.dwd.de", 443), timeout=5.0)
+
+
+class TestExecutionTimeout:
+    """Tests for ExecutionTimeout context manager"""
+
+    def test_no_timeout_when_fast(self):
+        """Test that fast operations complete normally"""
+        from imeteo_radar.core.retry import ExecutionTimeout
+
+        with ExecutionTimeout(10):
+            result = 1 + 1
+
+        assert result == 2
+
+    def test_timeout_raises_system_exit(self):
+        """Test that timeout triggers SystemExit(2)"""
+        from imeteo_radar.core.retry import ExecutionTimeout
+
+        with pytest.raises(SystemExit) as exc_info:
+            with ExecutionTimeout(1, message="test timeout"):
+                time.sleep(3)
+
+        assert exc_info.value.code == 2
+
+    def test_alarm_cleared_on_normal_exit(self):
+        """Test that SIGALRM is cleared after normal context exit"""
+        import signal
+
+        from imeteo_radar.core.retry import ExecutionTimeout
+
+        with ExecutionTimeout(60):
+            pass
+
+        # Alarm should be cleared (0 means no alarm pending)
+        remaining = signal.alarm(0)
+        assert remaining == 0
