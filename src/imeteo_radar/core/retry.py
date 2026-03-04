@@ -26,8 +26,15 @@ def tcp_probe(host: str, port: int = 443, timeout: float = 5.0) -> None:
         ) from e
 
 
+class ExecutionTimeoutError(Exception):
+    """Raised when ExecutionTimeout deadline is exceeded."""
+
+
 class ExecutionTimeout:
-    """SIGALRM-based wall-clock deadline. Unix-only. Raises SystemExit(2) on timeout."""
+    """SIGALRM-based wall-clock deadline. Unix-only.
+
+    Raises ExecutionTimeoutError when the deadline is exceeded.
+    """
 
     def __init__(self, seconds: int, message: str = "Execution timeout"):
         self.seconds = seconds
@@ -43,7 +50,7 @@ class ExecutionTimeout:
 
     def _handle_alarm(self, signum, frame):
         signal.alarm(0)
-        sys.exit(2)
+        raise ExecutionTimeoutError(self.message)
 
     def __exit__(self, *exc):
         signal.alarm(0)
