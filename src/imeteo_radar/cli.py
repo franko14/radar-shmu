@@ -88,7 +88,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--timeout",
         type=int,
         default=180,
-        help="Max execution time in seconds (default: 180). Exit code 2 on timeout.",
+        help="Max execution time in seconds (default: 180). Exits cleanly on timeout.",
     )
 
     # Reprocess count for non-backload mode
@@ -263,7 +263,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--timeout",
         type=int,
         default=180,
-        help="Max execution time in seconds (default: 180). Exit code 2 on timeout.",
+        help="Max execution time in seconds (default: 180). Exits cleanly on timeout.",
     )
     composite_parser.add_argument(
         "--disable-upload",
@@ -1086,7 +1086,7 @@ def main():
         log_file=log_file,
     )
 
-    from .core.retry import ExecutionTimeout
+    from .core.retry import ExecutionTimeout, ExecutionTimeoutError
 
     timeout = getattr(args, "timeout", 0)
 
@@ -1111,11 +1111,9 @@ def main():
     except KeyboardInterrupt:
         logger.warning("Operation cancelled by user")
         return 1
-    except SystemExit as e:
-        if e.code == 2 and timeout > 0:
-            logger.error(f"Execution timeout after {timeout}s")
-            return 2
-        raise
+    except ExecutionTimeoutError:
+        logger.warning(f"Execution timeout after {timeout}s, next run will continue")
+        return 0
     except Exception as e:
         logger.error(f"Error: {e}")
         return 1

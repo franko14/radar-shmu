@@ -455,15 +455,13 @@ class TestExecutionTimeout:
 
         assert result == 2
 
-    def test_timeout_raises_system_exit(self):
-        """Test that timeout triggers SystemExit(2)"""
-        from imeteo_radar.core.retry import ExecutionTimeout
+    def test_timeout_raises_execution_timeout_error(self):
+        """Test that timeout triggers ExecutionTimeoutError"""
+        from imeteo_radar.core.retry import ExecutionTimeout, ExecutionTimeoutError
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(ExecutionTimeoutError):
             with ExecutionTimeout(1, message="test timeout"):
                 time.sleep(3)
-
-        assert exc_info.value.code == 2
 
     def test_alarm_cleared_on_normal_exit(self):
         """Test that SIGALRM is cleared after normal context exit"""
