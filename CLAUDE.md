@@ -110,23 +110,44 @@ This project uses git-flow. All agents and contributors MUST follow these rules.
 5. **Tag releases** on main after merge: `git tag v2.X.Y && git push origin v2.X.Y`
 6. **Delete branches** after merge — keep only `main` and active work branches
 
+### Hook Enforcement
+
+Three git hooks in `scripts/hooks/` enforce the workflow locally:
+
+| Hook | What it blocks |
+|------|----------------|
+| `pre-commit` | Commits on `main` branch |
+| `pre-push` | Pushes targeting `refs/heads/main` (tags allowed) |
+| `commit-msg` | Non-conventional commit messages |
+
+Install after cloning: `./scripts/install-hooks.sh`
+
 ### Release Process
 
+Use the interactive release script:
+
 ```bash
-# 1. Create branch
+./scripts/release.sh
+```
+
+The script guides you through:
+1. Verifies you're on `main` with a clean tree
+2. Reads current version, prompts for bump type (major/minor/patch)
+3. Creates `release/vX.Y.Z` branch
+4. Pauses for you to edit `pyproject.toml` and `CHANGELOG.md`
+5. Commits, pushes, and prints the `gh pr create` command
+6. After PR merge: prints `git tag` + `git push` commands
+
+Manual alternative (without script):
+
+```bash
 git checkout -b release/v2.9.0
-
-# 2. Bump version in pyproject.toml, update CHANGELOG.md, commit
-
-# 3. Push and create PR
+# Edit pyproject.toml version, update CHANGELOG.md, commit
 git push -u origin release/v2.9.0
 gh pr create --title "release: v2.9.0"
-
-# 4. After merge, tag and push
+# After merge:
 git checkout main && git pull
 git tag v2.9.0 && git push origin v2.9.0
-
-# 5. CI builds and pushes Docker image automatically (tag push only)
 ```
 
 ### CI/CD

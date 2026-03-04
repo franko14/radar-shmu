@@ -318,38 +318,63 @@ with h5py.File('file.hdf', 'r') as f:
 
 ---
 
+## Git Hooks
+
+Three hooks enforce the git-flow workflow locally. Install them after cloning:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+| Hook | Purpose |
+|------|---------|
+| `pre-commit` | Blocks commits on `main` — use a feature branch |
+| `pre-push` | Blocks pushes to `refs/heads/main` — use a PR. Tag pushes are allowed. |
+| `commit-msg` | Enforces conventional commit format: `<type>(<scope>): <description>` |
+
+Allowed commit types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`, `release`
+
+Hooks live in `scripts/hooks/` and are copied to `.git/hooks/` by the installer.
+
+---
+
 ## Release Process
 
-### 1. Update Version
-
-Edit `pyproject.toml`:
-
-```toml
-version = "1.3.0"
-```
-
-### 2. Update Changelog
-
-Add entry to `CHANGELOG.md`.
-
-### 3. Run Tests
+Use the interactive release script:
 
 ```bash
-pytest
+./scripts/release.sh
 ```
 
-### 4. Create Tag
+The script walks you through the full flow:
+
+1. Checks you're on `main` with a clean working tree
+2. Reads the current version from `pyproject.toml`
+3. Prompts for bump type (major / minor / patch) and computes the new version
+4. Creates a `release/vX.Y.Z` branch
+5. Pauses for you to edit `pyproject.toml` (version) and `CHANGELOG.md`
+6. Commits, pushes the branch, and prints the `gh pr create` command
+7. After PR merge: prints the `git tag` and `git push` commands
+
+### Manual steps (without the script)
 
 ```bash
-git tag v1.3.0
-git push origin v1.3.0
+# 1. Create release branch
+git checkout -b release/v2.9.0
+
+# 2. Bump version in pyproject.toml, add CHANGELOG.md entry, commit
+git commit -m "release: v2.9.0"
+
+# 3. Push and create PR
+git push -u origin release/v2.9.0
+gh pr create --title "release: v2.9.0"
+
+# 4. After merge, tag and push
+git checkout main && git pull
+git tag v2.9.0 && git push origin v2.9.0
 ```
 
-### 5. Build Docker Image
-
-```bash
-./scripts/docker-push.sh
-```
+CI builds and pushes the Docker image automatically on tag push (`v*`).
 
 ---
 

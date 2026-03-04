@@ -9,7 +9,8 @@ services:
     image: lfranko/imeteo-radar:latest
     container_name: imeteo-radar
     volumes:
-      - ${RADAR_OUTPUT_DIR:-./radar-output}:/tmp  # Maps to local directory
+      - ${RADAR_OUTPUT_DIR:-./outputs}:/tmp/iradar          # PNG outputs only
+      - ${RADAR_DATA_DIR:-./outputs/iradar-data}:/tmp/iradar-data  # Cache & metadata
     environment:
       - TZ=Europe/Berlin
       - DIGITALOCEAN_SPACES_KEY=${DIGITALOCEAN_SPACES_KEY}
@@ -30,7 +31,8 @@ services:
     container_name: dwd-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source dwd; sleep 300; done"
     volumes:
-      - ${RADAR_OUTPUT_DIR:-./radar-output}/germany:/tmp/iradar/germany  # Maps to local directory
+      - ${RADAR_OUTPUT_DIR:-./outputs}/germany:/tmp/iradar/germany
+      - ${RADAR_DATA_DIR:-./outputs/iradar-data}:/tmp/iradar-data
     environment:
       - TZ=Europe/Berlin
       - DIGITALOCEAN_SPACES_KEY=${DIGITALOCEAN_SPACES_KEY}
@@ -54,7 +56,8 @@ services:
     container_name: shmu-fetcher
     command: sh -c "while true; do imeteo-radar fetch --source shmu; sleep 300; done"
     volumes:
-      - ${RADAR_OUTPUT_DIR:-./radar-output}/slovakia:/tmp/iradar/slovakia  # Maps to local directory
+      - ${RADAR_OUTPUT_DIR:-./outputs}/slovakia:/tmp/iradar/slovakia
+      - ${RADAR_DATA_DIR:-./outputs/iradar-data}:/tmp/iradar-data
     environment:
       - TZ=Europe/Bratislava
       - DIGITALOCEAN_SPACES_KEY=${DIGITALOCEAN_SPACES_KEY}
@@ -85,7 +88,8 @@ services:
         sleep 86400;
       done"
     volumes:
-      - ${RADAR_OUTPUT_DIR:-./radar-output}:/tmp  # Maps to local directory
+      - ${RADAR_OUTPUT_DIR:-./outputs}:/tmp/iradar
+      - ${RADAR_DATA_DIR:-./outputs/iradar-data}:/tmp/iradar-data
     environment:
       - TZ=Europe/Berlin
       - DIGITALOCEAN_SPACES_KEY=${DIGITALOCEAN_SPACES_KEY}
@@ -115,7 +119,8 @@ services:
         sleep 86400;
       done"
     volumes:
-      - ${RADAR_OUTPUT_DIR:-./radar-output}:/tmp  # Maps to local directory
+      - ${RADAR_OUTPUT_DIR:-./outputs}:/tmp/iradar
+      - ${RADAR_DATA_DIR:-./outputs/iradar-data}:/tmp/iradar-data
     environment:
       - TZ=Europe/Berlin
       - DIGITALOCEAN_SPACES_KEY=${DIGITALOCEAN_SPACES_KEY}
