@@ -7,9 +7,48 @@ backoff strategies and callback hooks.
 """
 
 import random
+import signal
+import socket
+import sys
 import time
 from functools import wraps
 from collections.abc import Callable
+
+
+def tcp_probe(host: str, port: int = 443, timeout: float = 5.0) -> None:
+    """Fast TCP reachability check. Raises ConnectionError on failure."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+    except OSError as e:
+        raise ConnectionError(
+            f"{host}:{port} unreachable ({timeout}s): {e}"
+        ) from e
+
+
+class ExecutionTimeout:
+    """SIGALRM-based wall-clock deadline. Unix-only. Raises SystemExit(2) on timeout."""
+
+    def __init__(self, seconds: int, message: str = "Execution timeout"):
+        self.seconds = seconds
+        self.message = message
+        self._old_handler = signal.SIG_DFL
+
+    def __enter__(self):
+        self._old_handler = signal.signal(
+            signal.SIGALRM, self._handle_alarm
+        )
+        signal.alarm(self.seconds)
+        return self
+
+    def _handle_alarm(self, signum, frame):
+        signal.alarm(0)
+        sys.exit(2)
+
+    def __exit__(self, *exc):
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, self._old_handler)
+        return False
 
 
 def retry_with_backoff(
@@ -19,6 +58,7 @@ def retry_with_backoff(
     exceptions: tuple[type[Exception], ...] = (Exception,),
     on_retry: Callable[[int, float, Exception], None] | None = None,
     jitter: bool = False,
+    connectivity_check: Callable[[], None] | None = None,
 ):
     """Decorator for retry with exponential backoff.
 
@@ -34,6 +74,8 @@ def retry_with_backoff(
         on_retry: Optional callback called before each retry with
             (attempt_number, delay, exception)
         jitter: Add random jitter to delays to prevent thundering herd
+        connectivity_check: Optional callable run once before first attempt.
+            If it raises, the exception propagates with zero retries.
 
     Returns:
         Decorated function with retry behavior
@@ -55,6 +97,9 @@ def retry_with_backoff(
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
+            if connectivity_check is not None:
+                connectivity_check()
+
             last_exception = None
 
             for attempt in range(max_retries + 1):

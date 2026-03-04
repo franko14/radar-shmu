@@ -7,10 +7,12 @@ import os
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 
 from .logging import get_logger
+from .retry import tcp_probe
 
 logger = get_logger(__name__)
 
@@ -22,6 +24,19 @@ class RadarSource(ABC):
         self.name = name
         self.cache_dir = f"processed/{name}_data"
         self.temp_files: dict[str, str] = {}  # Track temporary files for cleanup
+
+    def check_connectivity(self, timeout: float = 5.0) -> None:
+        """TCP probe the source's host. Raises ConnectionError if unreachable."""
+        url = getattr(self, "base_url", None) or getattr(self, "BASE_URL", None)
+        if url is None:
+            return
+        host = urlparse(url).hostname
+        if host:
+            tcp_probe(host, 443, timeout)
+            logger.debug(
+                f"{self.name.upper()} connectivity OK ({host}:443)",
+                extra={"source": self.name},
+            )
 
     @abstractmethod
     def download_latest(

@@ -8,6 +8,7 @@ Focused on DWD dmax product with simple fetch command.
 import argparse
 import sys
 import time
+from contextlib import nullcontext as _nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -81,6 +82,13 @@ def create_parser() -> argparse.ArgumentParser:
         "--disable-upload",
         action="store_true",
         help="Disable upload to DigitalOcean Spaces (for local development only)",
+    )
+
+    fetch_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Max execution time in seconds (default: 180). Exit code 2 on timeout.",
     )
 
     # Reprocess count for non-backload mode
@@ -250,6 +258,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=6,
         help="Number of recent timestamps to (re)process (default: 6 = 30 min). "
         "Allows automatic reprocessing when providers backload data after outages.",
+    )
+    composite_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Max execution time in seconds (default: 180). Exit code 2 on timeout.",
     )
     composite_parser.add_argument(
         "--disable-upload",
@@ -636,6 +650,13 @@ def fetch_command(args) -> int:
             return 1
 
         source = get_source_instance(args.source)
+
+        try:
+            source.check_connectivity()
+        except ConnectionError as e:
+            logger.error(f"{args.source.upper()} server unreachable: {e}")
+            return 1
+
         product = source_config["product"]
         country_dir = source_config["country"]
 
@@ -1065,26 +1086,36 @@ def main():
         log_file=log_file,
     )
 
+    from .core.retry import ExecutionTimeout
+
+    timeout = getattr(args, "timeout", 0)
+
     try:
-        if args.command == "fetch":
-            return fetch_command(args)
-        elif args.command == "extent":
-            return extent_command(args)
-        elif args.command == "composite":
-            return composite_command(args)
-        elif args.command == "coverage-mask":
-            return coverage_mask_command(args)
-        elif args.command == "cache":
-            return cache_command(args)
-        elif args.command == "transform-cache":
-            return transform_cache_command(args)
-        else:
-            logger.error(f"Unknown command: {args.command}")
-            return 1
+        with ExecutionTimeout(timeout) if timeout > 0 else _nullcontext():
+            if args.command == "fetch":
+                return fetch_command(args)
+            elif args.command == "extent":
+                return extent_command(args)
+            elif args.command == "composite":
+                return composite_command(args)
+            elif args.command == "coverage-mask":
+                return coverage_mask_command(args)
+            elif args.command == "cache":
+                return cache_command(args)
+            elif args.command == "transform-cache":
+                return transform_cache_command(args)
+            else:
+                logger.error(f"Unknown command: {args.command}")
+                return 1
 
     except KeyboardInterrupt:
         logger.warning("Operation cancelled by user")
         return 1
+    except SystemExit as e:
+        if e.code == 2 and timeout > 0:
+            logger.error(f"Execution timeout after {timeout}s")
+            return 2
+        raise
     except Exception as e:
         logger.error(f"Error: {e}")
         return 1
