@@ -5,6 +5,36 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-03-04
+
+### Added
+- **Connectivity pre-check** — `tcp_probe()` verifies host reachability before retry
+  loops, failing fast instead of burning all retries on unreachable servers
+- **`check_connectivity()` on RadarSource base class** — all sources now probe their
+  server before downloading, with clear `ConnectionError` on failure
+- **Execution timeout** — new `ExecutionTimeout` context manager (SIGALRM-based
+  wall-clock deadline) with `--timeout` CLI flag for fetch and composite commands
+  (default: 180s, exit code 2 on timeout)
+- **`connectivity_check` parameter** on `retry_with_backoff` decorator for pre-retry
+  validation
+- **commit-msg git hook** — enforces conventional commit format locally
+- **Interactive release script** (`scripts/release.sh`) — guides the full release
+  workflow: version bump, branch creation, changelog, PR, and tag
+- **Hook installer** (`scripts/install-hooks.sh`) — installs all 3 hooks in one command
+
+### Changed
+- **Pre-push hook** now blocks direct pushes to `refs/heads/main` (tag pushes
+  still allowed for releases)
+- **docker-compose.yml** — split output and cache into separate volume mounts,
+  update default paths from `./radar-output` to `./outputs`
+- **docs/development.md** — modernized release process section, added hook
+  documentation, removed outdated v1.3.0 references
+- **CLAUDE.md** — added hook enforcement table and release script documentation
+
+### Removed
+- Inline DWD DNS/TCP/TLS diagnostic code in `dwd.py` — replaced by generic
+  `check_connectivity()` in base class
+
 ## [2.8.3] - 2026-03-03
 
 ### Fixed
