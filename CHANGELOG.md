@@ -5,6 +5,13 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-03-04
+
+### Fixed
+- **Timeout exits cleanly (exit 0)** for Kubernetes CronJob compatibility — previously
+  `sys.exit(2)` caused pods to be marked as Failed; now raises `ExecutionTimeoutError`
+  caught by CLI, logs a warning, and exits 0 so the next scheduled run continues normally
+
 ## [2.9.0] - 2026-03-04
 
 ### Added
