@@ -108,9 +108,9 @@ class SpacesUploader:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             if error_code == "404":
-                raise ValueError(f"Bucket not found") from e
+                raise ValueError("Bucket not found") from e
             elif error_code == "403":
-                raise ValueError(f"Access denied to bucket") from e
+                raise ValueError("Access denied to bucket") from e
             else:
                 raise ValueError(
                     f"Failed to connect to DigitalOcean Spaces: {e}"

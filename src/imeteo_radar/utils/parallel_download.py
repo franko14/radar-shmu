@@ -7,10 +7,10 @@ across all source classes (DWD, SHMU, CHMI, OMSZ, IMGW).
 """
 
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from ..core.logging import get_logger
 

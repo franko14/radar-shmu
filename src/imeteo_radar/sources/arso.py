@@ -394,7 +394,7 @@ class ARSORadarSource(RadarSource):
             )
         else:
             logger.debug(
-                f"ARSO: Latest timestamp doesn't match any requested timestamps",
+                "ARSO: Latest timestamp doesn't match any requested timestamps",
                 extra={"source": "arso"},
             )
 

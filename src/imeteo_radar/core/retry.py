@@ -9,10 +9,9 @@ backoff strategies and callback hooks.
 import random
 import signal
 import socket
-import sys
 import time
-from functools import wraps
 from collections.abc import Callable
+from functools import wraps
 
 
 def tcp_probe(host: str, port: int = 443, timeout: float = 5.0) -> None:

@@ -23,6 +23,7 @@ import numpy as np
 from PIL import Image
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
+
 from ..config.sources import (
     get_all_source_names,
     get_source_config,

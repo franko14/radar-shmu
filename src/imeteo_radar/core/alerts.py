@@ -7,10 +7,10 @@ the health of radar data sources.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-from collections.abc import Callable
 
 
 class AlertLevel(Enum):

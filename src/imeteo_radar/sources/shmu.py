@@ -13,9 +13,6 @@ from typing import Any
 import requests
 import urllib3
 
-# Suppress SSL verification warnings for SHMU (their certificate has issues)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 from ..core.base import (
     RadarSource,
     extract_hdf5_corner_extent,
@@ -37,6 +34,9 @@ from ..utils.timestamps import (
     filter_timestamps_by_range,
     generate_timestamp_candidates,
 )
+
+# Suppress SSL verification warnings for SHMU (their certificate has issues)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = get_logger(__name__)
 
