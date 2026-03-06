@@ -5,7 +5,7 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.9.3] - 2026-03-06
+## [2.9.3] - 2026-03-06 ([#33](https://github.com/franko14/radar-shmu/pull/33), [#34](https://github.com/franko14/radar-shmu/pull/34), [#36](https://github.com/franko14/radar-shmu/pull/36))
 
 ### Changed
 - **Simplified `export_variants()` API** — reduced from 8 parameters to 4 by absorbing
@@ -29,7 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unused `export_png()` wrapper method from exporter (56 lines, never called externally)
 - Unused coordinate arrays (`_lons`, `_lats`) from SHMU, CHMI, IMGW, and OMSZ sources
 
-## [2.9.2] - 2026-03-06
+### Documentation
+- Updated docs to reflect current API (`export_variants`, `ExportConfig`, `MultiFormatExporter`)
+- Updated Python requirement to 3.11+, tooling references to ruff
+- Added current memory safeguards to profiling results
+
+## [2.9.2] - 2026-03-06 ([#31](https://github.com/franko14/radar-shmu/pull/31), [#32](https://github.com/franko14/radar-shmu/pull/32))
 
 ### Changed
 - **Deduplicated CLI code** — extracted shared uploader init, cache args, and export

@@ -113,6 +113,13 @@ The main memory hog is holding all 5 source radar arrays in `sources_data` simul
 
 Plus coordinate arrays, interpolation temporaries, and composite grid (~88 MB).
 
+## Current Safeguards
+
+- **Guaranteed array cleanup** — compositor wraps reprojected arrays in `try/finally` for deterministic memory release, preventing leaks on exceptions
+- **No redundant allocations** — compositor and reprojector skip `astype(np.float32)` when data is already float32
+- **No unused arrays** — sources compute extent from corner coordinates only, without intermediate coordinate arrays
+- **Minimal S3 overhead** — transform cache uploads to S3 only on initial compute, with no per-request HEAD checks
+
 ## Future Optimization Opportunities
 
 1. **Stream processing**: Process and merge each source individually, deleting radar_data immediately after merge (requires skipping individual exports or changing export order).
