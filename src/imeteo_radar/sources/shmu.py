@@ -292,9 +292,6 @@ class SHMURadarSource(RadarSource):
                 ur_lon = float(where_attrs["UR_lon"])
                 ur_lat = float(where_attrs["UR_lat"])
 
-                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])
-
                 # Extract metadata
                 product = what_attrs.get("product", "UNKNOWN")
                 quantity = what_attrs.get("quantity", "UNKNOWN")

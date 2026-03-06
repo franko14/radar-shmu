@@ -286,9 +286,6 @@ class CHMIRadarSource(RadarSource):
                     ll_lon, ll_lat = 11.266869, 48.047275
                     ur_lon, ur_lat = 19.623974, 51.458369
 
-                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
-
                 # Extract metadata
                 product = what_dataset_attrs.get("product", "UNKNOWN")
                 quantity = what_attrs.get("quantity", "UNKNOWN")

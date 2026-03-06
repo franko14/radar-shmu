@@ -365,10 +365,6 @@ class OMSZRadarSource(RadarSource):
                 west = lo1
                 east = lo1 + (n_lon - 1) * dx
 
-                # Create coordinate arrays
-                _lons = np.linspace(west, east, n_lon)
-                _lats = np.linspace(north, south, n_lat)  # North to south
-
                 # Build projection info for reprojector
                 # OMSZ uses pure WGS84 lat/lon grid (NetCDF format)
                 # Include grid parameters for documentation and verification

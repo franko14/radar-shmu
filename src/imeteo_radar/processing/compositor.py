@@ -158,33 +158,38 @@ class RadarCompositor:
             before_count = np.count_nonzero(~np.isnan(self.composite_data))
 
             # Create output array for reprojected data
+            source_f32 = source_data if source_data.dtype == np.float32 else source_data.astype(np.float32)
             reprojected = np.full(
                 (self.grid_height, self.grid_width), np.nan, dtype=np.float32
             )
 
-            # Use rasterio.warp.reproject for proper geospatial transformation
-            reproject(
-                source=source_data.astype(np.float32),
-                destination=reprojected,
-                src_transform=source_transform,
-                src_crs=source_crs,
-                dst_transform=self.target_transform,
-                dst_crs=get_crs_web_mercator(),
-                resampling=Resampling.nearest,  # Preserve discrete dBZ values
-                src_nodata=np.nan,
-                dst_nodata=np.nan,
-            )
-
-            # Count reprojected valid pixels
-            reprojected_valid = np.sum(~np.isnan(reprojected))
-            if reprojected_valid == 0:
-                logger.warning(
-                    f"No data from {source_name} overlaps target extent, skipping"
+            try:
+                # Use rasterio.warp.reproject for proper geospatial transformation
+                reproject(
+                    source=source_f32,
+                    destination=reprojected,
+                    src_transform=source_transform,
+                    src_crs=source_crs,
+                    dst_transform=self.target_transform,
+                    dst_crs=get_crs_web_mercator(),
+                    resampling=Resampling.nearest,
+                    src_nodata=np.nan,
+                    dst_nodata=np.nan,
                 )
-                return False
 
-            # Merge into composite using NaN-aware max
-            self.composite_data = np.fmax(self.composite_data, reprojected)
+                # Count reprojected valid pixels
+                reprojected_valid = np.sum(~np.isnan(reprojected))
+                if reprojected_valid == 0:
+                    logger.warning(
+                        f"No data from {source_name} overlaps target extent, skipping"
+                    )
+                    return False
+
+                # Merge into composite using NaN-aware max
+                self.composite_data = np.fmax(self.composite_data, reprojected)
+            finally:
+                del reprojected
+                gc.collect()
 
             after_count = np.count_nonzero(~np.isnan(self.composite_data))
             new_pixels = after_count - before_count
@@ -200,11 +205,6 @@ class RadarCompositor:
 
             # Track merged sources
             self.sources_merged.append(source_name)
-
-            # Cleanup
-            del reprojected
-            gc.collect()
-
             return True
 
         except Exception as e:

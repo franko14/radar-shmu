@@ -35,6 +35,8 @@ class ExportConfig:
             Default 6 (Pillow default). Use 8+ for CPU-constrained environments.
         avif_codec: AVIF codec to use. "auto" lets Pillow decide, or specify
             "aom", "svt", "rav1e". SVT-AV1 is significantly faster on multi-core.
+        colormap_type: Colormap to use. "auto" selects based on data type.
+        reproject: Whether to reproject data to Web Mercator (EPSG:3857).
     """
 
     resolutions_m: list[float] = field(default_factory=list)
@@ -43,6 +45,8 @@ class ExportConfig:
     avif_quality: int = 50
     avif_speed: int = 6
     avif_codec: str = "auto"
+    colormap_type: str = "auto"
+    reproject: bool = True
 
 
 # Source native resolutions in meters (approximate)
@@ -396,10 +400,6 @@ class MultiFormatExporter:
         output_base_path: Path,
         extent: dict[str, Any],
         config: ExportConfig | None = None,
-        colormap_type: str = "auto",
-        transparent_background: bool = True,
-        reproject: bool = True,
-        use_cached_transform: bool = True,
     ) -> dict[str, tuple[Path, dict[str, Any]]]:
         """Export all configured variants (formats and resolutions).
 
@@ -407,11 +407,7 @@ class MultiFormatExporter:
             radar_data: Radar data dictionary with 'data' array
             output_base_path: Base path without extension (e.g., /output/germany/1738675200)
             extent: Geographic extent information
-            config: Export configuration. Defaults to PNG+AVIF with 1000m scaled variant.
-            colormap_type: Type of colormap to use ('auto', 'shmu', etc.)
-            transparent_background: Whether to make background transparent
-            reproject: Whether to reproject data to Web Mercator (EPSG:3857)
-            use_cached_transform: Whether to use cached transform grids
+            config: Export configuration (colormap, reproject, formats, resolutions).
 
         Returns:
             Dict mapping variant_name to (path, metadata) tuple.
@@ -419,6 +415,9 @@ class MultiFormatExporter:
         """
         if config is None:
             config = ExportConfig()
+
+        colormap_type = config.colormap_type
+        reproject = config.reproject
 
         try:
             data = radar_data["data"]
@@ -435,11 +434,7 @@ class MultiFormatExporter:
                 source_name = radar_data.get("metadata", {}).get("source", "").lower()
 
                 # Try fast path with cached transform first
-                if (
-                    use_cached_transform
-                    and self._use_transform_cache
-                    and projection_info
-                ):
+                if self._use_transform_cache and projection_info:
                     data, wgs84_bounds, used_cache = self._reproject_with_cache(
                         data,
                         projection_info,
@@ -508,7 +503,7 @@ class MultiFormatExporter:
             lut_info = self.colormap_luts[cmap_name]
 
             rgba_data, valid_mask = self._render_to_rgba(
-                data, cmap_name, transparent_background
+                data, cmap_name, transparent_background=True
             )
 
             # Extract values needed for metadata, then free the large float32 array (~96 MB)
@@ -532,7 +527,7 @@ class MultiFormatExporter:
                 "data_range": data_range,
                 "valid_pixels": int(np.sum(valid_mask)),
                 "used_cached_transform": used_cache,
-                "transparent": transparent_background,
+                "transparent": True,
                 "timestamp": radar_data.get("timestamp", "unknown"),
                 "reprojected": reproject,
             }
@@ -547,7 +542,7 @@ class MultiFormatExporter:
                     output_path = output_base_path.with_suffix(f".{fmt}")
 
                     if fmt == "png":
-                        self._save_png(rgba_data, output_path, transparent_background)
+                        self._save_png(rgba_data, output_path)
                     elif fmt == "avif":
                         self._save_avif(
                             rgba_data,
@@ -582,7 +577,7 @@ class MultiFormatExporter:
                     )
 
                     if fmt == "png":
-                        self._save_png(scaled_rgba, output_path, transparent_background)
+                        self._save_png(scaled_rgba, output_path)
                     elif fmt == "avif":
                         self._save_avif(
                             scaled_rgba,
@@ -612,63 +607,6 @@ class MultiFormatExporter:
         except Exception:
             logger.error(f"Export failed for {output_base_path}", exc_info=True)
             raise
-
-    def export_png(
-        self,
-        radar_data: dict[str, Any],
-        output_path: Path,
-        extent: dict[str, Any],
-        colormap_type: str = "auto",
-        transparent_background: bool = True,
-        reproject: bool = True,
-        use_cached_transform: bool = True,
-    ) -> tuple[Path, dict[str, Any]]:
-        """
-        Export radar data as transparent PNG using PIL with LUT-based colormap.
-
-        This is a backward-compatible method that exports a single PNG file.
-        For multi-format export, use export_variants() instead.
-
-        Args:
-            radar_data: Radar data dictionary with 'data' array
-            output_path: Path where to save the PNG file
-            extent: Geographic extent information
-            colormap_type: Type of colormap to use ('auto', 'shmu', etc.)
-            transparent_background: Whether to make background transparent
-            reproject: Whether to reproject data to Web Mercator (EPSG:3857)
-            use_cached_transform: Whether to use cached transform grids for
-                faster reprojection. Default True.
-
-        Returns:
-            Tuple of (saved_path, metadata_dict)
-        """
-        # Use export_variants with PNG-only config
-        config = ExportConfig(
-            resolutions_m=[],  # No scaled variants
-            include_full=True,
-            formats=["png"],
-        )
-
-        # Ensure output_path has .png extension for base path calculation
-        output_path = Path(output_path)
-        base_path = output_path.with_suffix("")
-
-        variants = self.export_variants(
-            radar_data=radar_data,
-            output_base_path=base_path,
-            extent=extent,
-            config=config,
-            colormap_type=colormap_type,
-            transparent_background=transparent_background,
-            reproject=reproject,
-            use_cached_transform=use_cached_transform,
-        )
-
-        # Return the full PNG variant
-        if "full.png" in variants:
-            return variants["full.png"]
-
-        raise RuntimeError("PNG export failed - no variant produced")
 
     def _select_colormap(
         self, radar_data: dict[str, Any], colormap_type: str

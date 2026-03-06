@@ -360,15 +360,10 @@ def parse_timestamp_to_datetime(timestamp_str: str, source: str) -> datetime:
     Returns:
         datetime object
     """
-    if source == "omsz":
-        # OMSZ format: YYYYMMDD_HHMM or YYYYMMDDHHMM
-        if "_" in timestamp_str:
-            return datetime.strptime(timestamp_str, "%Y%m%d_%H%M")
-        else:
-            return datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
-    else:
-        # DWD/SHMU/CHMI/ARSO format: YYYYMMDDHHMM00 (14 chars) or YYYYMMDDHHMM (12 chars)
-        return datetime.strptime(timestamp_str[:12], "%Y%m%d%H%M")
+    # Normalize: strip underscores (DWD/OMSZ use YYYYMMDD_HHMM format in cache)
+    normalized = timestamp_str.replace("_", "")
+    # Parse first 12 chars: YYYYMMDDHHMM (ignoring trailing seconds if present)
+    return datetime.strptime(normalized[:12], "%Y%m%d%H%M")
 
 
 def generate_extent_info(source, source_name: str, country_dir: str) -> dict:
@@ -514,6 +509,8 @@ def parse_export_config(args):
         avif_quality=avif_quality,
         avif_speed=avif_speed,
         avif_codec=avif_codec,
+        colormap_type="reflectivity_shmu",
+        reproject=True,
     )
 
 
@@ -682,8 +679,6 @@ def fetch_command(args) -> int:
                         output_base_path=base_path,
                         extent=extent,
                         config=export_config,
-                        colormap_type="reflectivity_shmu",
-                        reproject=True,
                     )
 
                     processed_count += 1
@@ -813,8 +808,6 @@ def fetch_command(args) -> int:
                         output_base_path=base_path,
                         extent=extent,
                         config=export_config,
-                        colormap_type="reflectivity_shmu",
-                        reproject=True,
                     )
 
                     processed_count += 1
@@ -871,8 +864,6 @@ def fetch_command(args) -> int:
                         output_base_path=base_path,
                         extent=extent,
                         config=export_config,
-                        colormap_type="reflectivity_shmu",
-                        reproject=True,
                     )
 
                     logger.info(f"Saved (from cache): {len(variants)} variants")
