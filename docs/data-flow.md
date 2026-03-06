@@ -15,7 +15,7 @@ sequenceDiagram
     participant Cache as ProcessedDataCache<br/>(local + S3)
     participant Source as RadarSource<br/>(e.g. DWD)
     participant Provider as Data Provider<br/>(e.g. opendata.dwd.de)
-    participant Exporter as PNGExporter
+    participant Exporter as MultiFormatExporter
     participant TCache as TransformCache<br/>(memory/disk/S3)
     participant Upload as SpacesUploader<br/>(S3)
 
@@ -59,7 +59,8 @@ sequenceDiagram
         CLI->>Cache: put("dwd", ts, "dmax", radar_data)
         Note over Cache: Save .npz + .json locally<br/>Upload both to S3
 
-        CLI->>Exporter: export_png_fast(radar_data, reproject=True)
+        CLI->>Exporter: export_variants(radar_data, base_path, extent, config)
+        Note over Exporter: config = ExportConfig(reproject=True, colormap_type=...)
         Note over Exporter,TCache: Reprojection (see diagram 4)
         Exporter->>TCache: get_or_compute("dwd", shape, projection)
         TCache-->>Exporter: TransformGrid (row/col indices)
@@ -77,7 +78,7 @@ sequenceDiagram
         CLI->>CLI: output_exists? → skip if yes
         CLI->>Cache: get("dwd", ts, "dmax")
         Cache-->>CLI: radar_data (from .npz + .json)
-        CLI->>Exporter: export_png_fast(radar_data, reproject=True)
+        CLI->>Exporter: export_variants(radar_data, reproject=True)
         Exporter-->>CLI: output_path
         CLI->>Upload: upload_file(...)
     end
@@ -100,7 +101,7 @@ sequenceDiagram
     participant Sources as 6 RadarSources
     participant Providers as Data Providers
     participant Compositor as RadarCompositor
-    participant Exporter as PNGExporter
+    participant Exporter as MultiFormatExporter
     participant Upload as SpacesUploader
 
     User->>CLI: imeteo-radar composite
@@ -175,7 +176,8 @@ sequenceDiagram
             end
 
             opt Export individual source PNG
-                CLI->>Exporter: export_png_fast(radar_data, reproject=True)
+                CLI->>Exporter: export_variants(radar_data, base_path, extent, config)
+                Note over Exporter: config has reproject=True for individual sources
                 CLI->>Upload: upload_file(source_png)
             end
 
@@ -185,8 +187,8 @@ sequenceDiagram
 
         CLI->>Compositor: get_composite()
         Compositor-->>CLI: merged_data (max reflectivity)
-        CLI->>Exporter: export_png_fast(composite, reproject=False)
-        Note over Exporter: Already in Web Mercator, no reprojection needed
+        CLI->>Exporter: export_variants(composite, base_path, extent, config)
+        Note over Exporter: config has reproject=False (already Web Mercator)
         CLI->>Upload: upload_file(composite_png)
     end
 
@@ -280,7 +282,7 @@ Precomputed pixel-to-pixel index mappings for 10-50x faster reprojection. Since 
 
 ```mermaid
 sequenceDiagram
-    participant Exporter as PNGExporter
+    participant Exporter as MultiFormatExporter
     participant TCache as TransformCache
     participant Mem as Tier 1: Memory<br/>(in-process dict)
     participant Disk as Tier 2: Local Disk<br/>/tmp/iradar-data/grid/
@@ -311,7 +313,7 @@ sequenceDiagram
                 TCache->>TCache: Build int16 row/col index arrays
                 TCache->>Mem: Store in memory
                 TCache->>Disk: Save .npz locally
-                TCache->>S3: Upload .npz
+                TCache->>S3: Upload .npz (only on initial compute)
                 TCache-->>Exporter: grid
             end
         end
@@ -348,7 +350,7 @@ How source data in native projections gets reprojected to Web Mercator (EPSG:385
 
 ```mermaid
 sequenceDiagram
-    participant Exporter as PNGExporter<br/>export_png_fast()
+    participant Exporter as MultiFormatExporter<br/>export_variants()
     participant Reproj as reprojector.py
     participant TCache as TransformCache
     participant Rasterio as rasterio.warp
@@ -417,14 +419,15 @@ From raw float32 reflectivity array to optimized PNG file.
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant Exporter as PNGExporter
+    participant Exporter as MultiFormatExporter
     participant TCache as TransformCache
     participant PIL as Pillow
 
-    Caller->>Exporter: export_png_fast(radar_data, reproject=True)
+    Caller->>Exporter: export_variants(radar_data, base_path, extent, config)
+    Note over Exporter: config = ExportConfig(reproject=True, colormap_type="shmu", ...)
 
     Note over Exporter: Step 1: Reproject (optional)
-    opt reproject=True and projection_info present
+    opt config.reproject=True and projection_info present
         Exporter->>TCache: get_or_compute(source, ...)
         TCache-->>Exporter: TransformGrid
         Exporter->>Exporter: fast_reproject(data, grid)
