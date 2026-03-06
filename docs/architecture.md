@@ -377,7 +377,7 @@ Precomputed pixel-to-pixel index mappings stored in a three-tier cache for fast 
 
 - Uses int16 indices (~4 bytes/pixel) for memory efficiency
 - `fast_reproject()` applies precomputed grid via numpy array indexing
-- S3 upload happens **only on initial grid compute** — no redundant S3 HEAD checks on cache hits (optimized in v2.9.3)
+- S3 upload happens only on initial grid compute (no per-request S3 checks)
 
 **Implementation**: `src/imeteo_radar/processing/transform_cache.py`
 
@@ -422,7 +422,7 @@ rgba = lut[indices]  # Direct lookup
 
 **Problem**: Creating 4800×4400 coordinate meshgrids (322 MB) that are never used after extent calculation.
 
-**Solution**: Calculate extent from 4 corner coordinates only. Unused `np.linspace()` coordinate arrays were also removed from SHMU, CHMI, IMGW, and OMSZ sources (v2.9.3).
+**Solution**: Calculate extent from 4 corner coordinates only.
 
 ```python
 # Before: 322 MB

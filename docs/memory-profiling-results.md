@@ -113,14 +113,12 @@ The main memory hog is holding all 5 source radar arrays in `sources_data` simul
 
 Plus coordinate arrays, interpolation temporaries, and composite grid (~88 MB).
 
-## v2.9.3 Optimizations (March 2026)
-
-Additional memory and performance improvements applied in v2.9.3:
+## Current Safeguards
 
 - **Guaranteed array cleanup** — compositor wraps reprojected arrays in `try/finally` for deterministic memory release, preventing leaks on exceptions
-- **Avoided redundant `float32` copies** — compositor and reprojector skip `astype(np.float32)` when data is already float32, saving allocation overhead
-- **Removed unused coordinate arrays** — SHMU, CHMI, IMGW, and OMSZ sources no longer create `np.linspace()` arrays that were computed but never used after extent calculation
-- **Removed redundant S3 calls** — `_ensure_in_s3()` HEAD check removed from transform cache hot path; `sync_with_s3()` paginator removed from default composite flow
+- **No redundant allocations** — compositor and reprojector skip `astype(np.float32)` when data is already float32
+- **No unused arrays** — sources compute extent from corner coordinates only, without intermediate coordinate arrays
+- **Minimal S3 overhead** — transform cache uploads to S3 only on initial compute, with no per-request HEAD checks
 
 ## Future Optimization Opportunities
 
