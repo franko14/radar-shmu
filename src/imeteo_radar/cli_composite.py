@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from .core.logging import get_logger
-from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
 from .utils.timestamps import is_timestamp_in_cache, normalize_timestamp
 
 logger = get_logger(__name__)
@@ -182,13 +181,9 @@ def _filter_available_sources(sources: dict, availability: dict[str, bool]) -> d
 def composite_command_impl(args: Any) -> int:
     """Handle composite generation command"""
     try:
+        from .config.sources import get_source_config, get_source_instance
         from .processing.exporter import MultiFormatExporter
-        from .sources.arso import ARSORadarSource
-        from .sources.chmi import CHMIRadarSource
-        from .sources.dwd import DWDRadarSource
-        from .sources.imgw import IMGWRadarSource
-        from .sources.omsz import OMSZRadarSource
-        from .sources.shmu import SHMURadarSource
+        from .utils.cli_helpers import init_uploader
 
         # Parse sources list
         source_names = [s.strip() for s in args.sources.split(",")]
@@ -202,45 +197,16 @@ def composite_command_impl(args: Any) -> int:
         logger.info(f"Output directory: {output_dir}")
 
         # Initialize DigitalOcean Spaces uploader
-        uploader = None
-        upload_enabled = not getattr(args, "disable_upload", False)
+        uploader = init_uploader(args)
 
-        if upload_enabled:
-            if is_spaces_configured():
-                try:
-                    uploader = SpacesUploader()
-                    logger.info("DigitalOcean Spaces upload enabled")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize Spaces uploader: {e}")
-                    logger.warning("Falling back to local-only mode (upload disabled)")
-                    upload_enabled = False
-            else:
-                logger.warning(
-                    "DigitalOcean Spaces not configured (missing environment variables)"
-                )
-                logger.warning("Falling back to local-only mode (upload disabled)")
-                upload_enabled = False
-        else:
-            logger.info("Local-only mode (--disable-upload flag used)")
-
-        # Initialize sources
+        # Initialize sources using centralized registry
         sources = {}
         for source_name in source_names:
-            if source_name == "dwd":
-                sources["dwd"] = (DWDRadarSource(), "dmax")
-            elif source_name == "shmu":
-                sources["shmu"] = (SHMURadarSource(), "zmax")
-            elif source_name == "chmi":
-                sources["chmi"] = (CHMIRadarSource(), "maxz")
-            elif source_name == "arso":
-                sources["arso"] = (ARSORadarSource(), "zm")
-            elif source_name == "omsz":
-                sources["omsz"] = (OMSZRadarSource(), "cmax")
-            elif source_name == "imgw":
-                sources["imgw"] = (IMGWRadarSource(), "cmax")
-            else:
+            config = get_source_config(source_name)
+            if not config:
                 logger.error(f"Unknown source: {source_name}")
                 return 1
+            sources[source_name] = (get_source_instance(source_name), config["product"])
 
         # Initialize multi-format exporter with config from CLI args
         from .cli import parse_export_config
@@ -274,104 +240,6 @@ def composite_command_impl(args: Any) -> int:
 
         traceback.print_exc()
         return 1
-
-
-def _find_common_timestamp_with_tolerance(
-    timestamp_groups, sources, tolerance_minutes=2, min_sources=None
-):
-    """Find most recent timestamp where sources have data within tolerance window
-
-    Args:
-        timestamp_groups: Dict mapping timestamp str -> Dict[source_name, file_info]
-        sources: Dict of source configurations
-        tolerance_minutes: Maximum time difference allowed (default: 2 minutes)
-        min_sources: Minimum sources required (default: all sources).
-                     Set lower for resilience to source outages.
-
-    Returns:
-        (common_timestamp, source_files) or (None, None)
-    """
-    from datetime import datetime, timedelta
-
-    # Default to requiring all sources
-    if min_sources is None:
-        min_sources = len(sources)
-
-    # Parse all timestamps to datetime
-    timestamp_datetimes = {}
-    for ts_str in timestamp_groups.keys():
-        try:
-            dt = datetime.strptime(ts_str[:12], "%Y%m%d%H%M")
-            timestamp_datetimes[ts_str] = dt
-        except ValueError:
-            continue
-
-    # Sort by datetime (most recent first)
-    sorted_timestamps = sorted(
-        timestamp_datetimes.keys(), key=lambda x: timestamp_datetimes[x], reverse=True
-    )
-
-    tolerance = timedelta(minutes=tolerance_minutes)
-
-    # Track best partial match for resilience
-    best_partial_match = None
-    best_partial_count = 0
-
-    # For each timestamp, check if sources have data within tolerance
-    for candidate_ts in sorted_timestamps:
-        candidate_dt = timestamp_datetimes[candidate_ts]
-        sources_in_window = {}
-
-        # Find sources with data in this time window
-        for ts_str, ts_dt in timestamp_datetimes.items():
-            if abs(ts_dt - candidate_dt) <= tolerance:
-                for source_name, file_info in timestamp_groups[ts_str].items():
-                    if source_name not in sources_in_window:
-                        sources_in_window[source_name] = (ts_str, file_info, ts_dt)
-                    else:
-                        # Keep the closer timestamp
-                        existing_ts, existing_info, existing_dt = sources_in_window[
-                            source_name
-                        ]
-                        if abs(ts_dt - candidate_dt) < abs(existing_dt - candidate_dt):
-                            sources_in_window[source_name] = (ts_str, file_info, ts_dt)
-
-        # Check if we have enough sources (all or minimum required)
-        if len(sources_in_window) == len(sources):
-            logger.info(f"Found common time window around {candidate_ts}")
-            for src, (ts, _, dt) in sources_in_window.items():
-                offset = (dt - candidate_dt).total_seconds() / 60
-                logger.debug(f"   {src.upper()}: {ts} (offset: {offset:+.1f} min)")
-
-            return candidate_ts, {
-                src: info for src, (_, info, _) in sources_in_window.items()
-            }
-
-        # Track best partial match if we allow partial composites
-        if min_sources < len(sources) and len(sources_in_window) >= min_sources:
-            if len(sources_in_window) > best_partial_count:
-                best_partial_count = len(sources_in_window)
-                best_partial_match = (candidate_ts, sources_in_window)
-
-    # Return best partial match if no full match found and partial allowed
-    if best_partial_match and best_partial_count >= min_sources:
-        candidate_ts, sources_in_window = best_partial_match
-        missing = set(sources.keys()) - set(sources_in_window.keys())
-        logger.warning(
-            f"No full match found. Using partial composite with {best_partial_count}/{len(sources)} sources"
-        )
-        logger.warning(f"   Missing sources: {', '.join(s.upper() for s in missing)}")
-        logger.info(f"Found partial time window around {candidate_ts}")
-        for src, (ts, _, dt) in sources_in_window.items():
-            candidate_dt = timestamp_datetimes[candidate_ts]
-            offset = (dt - candidate_dt).total_seconds() / 60
-            logger.debug(f"   {src.upper()}: {ts} (offset: {offset:+.1f} min)")
-
-        return candidate_ts, {
-            src: info for src, (_, info, _) in sources_in_window.items()
-        }
-
-    return None, None
 
 
 def _find_multiple_common_timestamps(
@@ -528,11 +396,14 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
     # Check cache first for available timestamps
     # This is especially important for ARSO which only provides latest data (no archive)
     # The cache serves as ARSO's "archive" for reprocessing
+    # Cache results per source to avoid repeated calls
+    cached_timestamps_by_source = {}
     if cache:
         logger.info("Checking cache for available timestamps...")
         for source_name in sources.keys():
             source, product = sources[source_name]
             cached_timestamps = cache.get_available_timestamps(source_name, product)
+            cached_timestamps_by_source[source_name] = cached_timestamps
             if cached_timestamps:
                 sources_with_cache.add(source_name)
                 # Log ARSO cache specially since it's critical for reprocessing
@@ -569,10 +440,8 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
             all_source_files[source_name] = []
             continue
 
-        # Get cached timestamps for this source
-        cached_ts_set = set()
-        if cache:
-            cached_ts_set = set(cache.get_available_timestamps(source_name, product))
+        # Get cached timestamps for this source (reuse pre-fetched results)
+        cached_ts_set = set(cached_timestamps_by_source.get(source_name, []))
 
         # Get available timestamps from provider (without downloading yet)
         try:
@@ -667,9 +536,8 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
     # Re-add any cached timestamps not already in timestamp_groups
     if cache:
         for source_name in sources.keys():
-            source, product = sources[source_name]
-            cached_timestamps = cache.get_available_timestamps(source_name, product)
-            for ts in cached_timestamps:
+            _source, product = sources[source_name]
+            for ts in cached_timestamps_by_source.get(source_name, []):
                 ts_normalized = normalize_timestamp(ts, target_length=14)
                 if ts_normalized not in timestamp_groups:
                     timestamp_groups[ts_normalized] = {}
@@ -834,6 +702,8 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
     logger.info(f"Found {len(common_timestamps)} timestamps to process")
 
     # ========== STEP 6: PROCESS EACH TIMESTAMP ==========
+    from .utils.cli_helpers import output_exists
+
     processed_count = 0
     last_composite = None
 
@@ -856,8 +726,6 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
         output_path = output_dir / filename
 
         # Check if composite already exists locally or in S3 (skip if unchanged)
-        from .utils.cli_helpers import output_exists
-
         if output_exists(output_path, "composite", filename, uploader):
             skip_reasons["already_exists"].append(common_timestamp)
             continue
@@ -1108,121 +976,15 @@ def _get_individual_source_dir(source_name: str, composite_output: Path) -> Path
     Returns:
         Path to individual source output directory
     """
-    # Map source names to country folder names
-    source_to_country = {
-        "dwd": "germany",
-        "shmu": "slovakia",
-        "chmi": "czechia",
-        "arso": "slovenia",
-        "omsz": "hungary",
-        "imgw": "poland",
-    }
+    from .config.sources import get_folder_for_source
 
-    country = source_to_country.get(source_name)
+    country = get_folder_for_source(source_name)
     if not country:
         return None
 
     # Individual sources are siblings of composite directory
     base_dir = composite_output.parent
     return base_dir / country
-
-
-def _export_individual_sources(
-    sources_data,
-    exporter,
-    export_config,
-    unix_timestamp,
-    timestamp_str,
-    args,
-    uploader=None,
-):
-    """Export individual source images with their native extents.
-
-    Each source is exported to a sibling directory of the composite output:
-    - If composite is ./outputs/composite/
-    - DWD -> ./outputs/germany/
-    - SHMU -> ./outputs/slovakia/
-    - CHMI -> ./outputs/czechia/
-    - ARSO -> ./outputs/slovenia/
-    - OMSZ -> ./outputs/hungary/
-    - IMGW -> ./outputs/poland/
-
-    Args:
-        sources_data: List of (source_name, radar_data) tuples
-        exporter: MultiFormatExporter instance
-        export_config: ExportConfig for multi-format export
-        unix_timestamp: Unix timestamp for filename
-        timestamp_str: Timestamp string for metadata
-        args: CLI arguments
-        uploader: Optional SpacesUploader instance for uploading to DO Spaces
-    """
-    import json
-    from datetime import datetime
-
-    composite_output = Path(args.output)
-
-    for source_name, radar_data in sources_data:
-        # Get output directory for this source (sibling of composite dir)
-        source_output_dir = _get_individual_source_dir(source_name, composite_output)
-        if source_output_dir is None:
-            logger.warning(f"Unknown source {source_name}, skipping individual export")
-            continue
-
-        # Create output directory
-        source_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Use radar_data directly - it contains data, extent, and projection info
-        # needed for proper reprojection to Web Mercator
-        radar_data["timestamp"] = timestamp_str
-        radar_data["metadata"] = radar_data.get("metadata", {})
-        radar_data["metadata"]["source"] = source_name
-        radar_data["metadata"]["units"] = "dBZ"
-
-        # Export all variants (full + scaled, PNG + AVIF)
-        base_path = source_output_dir / str(unix_timestamp)
-        logger.info(f"{source_name.upper()} -> {base_path}.*")
-        variants = exporter.export_variants(
-            radar_data=radar_data,
-            output_base_path=base_path,
-            extent=radar_data["extent"],
-            config=export_config,
-            colormap_type="shmu",
-            reproject=True,  # Reproject to EPSG:3857 for proper positioning
-        )
-
-        # Get the REPROJECTED bounds from export metadata (not native bounds)
-        reprojected_extent = {}
-        if variants:
-            first_metadata = next(iter(variants.values()))[1]
-            reprojected_extent = first_metadata.get(
-                "extent", radar_data.get("extent", {}).get("wgs84", {})
-            )
-
-        # Upload all variants to DigitalOcean Spaces
-        if uploader:
-            for variant_name, (variant_path, _) in variants.items():
-                try:
-                    uploader.upload_file(variant_path, source_name, variant_path.name)
-                    logger.debug(f"Uploaded to Spaces: {source_name}/{variant_path.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to upload {source_name}/{variant_name}: {e}")
-
-        # Save extent_index.json with REPROJECTED bounds (canonical format)
-        extent_dir = Path(f"/tmp/iradar-data/extent/{source_name}")
-        extent_dir.mkdir(parents=True, exist_ok=True)
-        extent_file = extent_dir / "extent_index.json"
-        if not extent_file.exists() or args.update_extent:
-            extent_data = {
-                "metadata": {
-                    "title": f"{source_name.upper()} Radar Coverage",
-                    "source": source_name,
-                    "generated": datetime.now().isoformat() + "Z",
-                },
-                "wgs84": reprojected_extent,
-            }
-            with open(extent_file, "w") as f:
-                json.dump(extent_data, f, indent=2)
-            logger.info(f"Saved extent to {extent_file}")
 
 
 def _export_single_source(
@@ -1569,7 +1331,6 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
     - Pass 1: Extract extents only (no data loading) -> Calculate combined extent
     - Pass 2: Process each source sequentially: Load -> Export individual -> Merge -> Delete
     """
-    import gc
     from datetime import datetime as dt
 
     import pytz
