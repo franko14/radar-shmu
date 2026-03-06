@@ -6,6 +6,7 @@ Focused on DWD dmax product with simple fetch command.
 """
 
 import argparse
+import gc
 import sys
 import time
 from contextlib import nullcontext as _nullcontext
@@ -100,69 +101,11 @@ def create_parser() -> argparse.ArgumentParser:
         "Fetching multiple timestamps handles irregular provider uploads.",
     )
 
-    # Cache arguments (same as composite for consistency)
-    fetch_parser.add_argument(
-        "--cache-dir",
-        type=Path,
-        default=Path("/tmp/iradar-data/data"),
-        help="Directory for processed data cache (default: /tmp/iradar-data/data)",
-    )
-    fetch_parser.add_argument(
-        "--cache-ttl",
-        type=int,
-        default=60,
-        help="Cache TTL in minutes (default: 60)",
-    )
-    fetch_parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable caching entirely",
-    )
-    fetch_parser.add_argument(
-        "--no-cache-upload",
-        action="store_true",
-        help="Disable S3 cache sync (local cache only)",
-    )
-    fetch_parser.add_argument(
-        "--clear-cache",
-        action="store_true",
-        help="Clear cache before running",
-    )
+    # Cache and export format arguments (shared with composite)
+    from .utils.cli_helpers import add_cache_args, add_export_format_args
 
-    # Export format options
-    fetch_parser.add_argument(
-        "--resolutions",
-        type=str,
-        default="full",
-        help="Comma-separated resolutions to export: 'full' for native, or meters (e.g., '1000,2000'). "
-        "Default: 'full'. Examples: 'full,1000', '1000,2000', 'full'.",
-    )
-    fetch_parser.add_argument(
-        "--formats",
-        type=str,
-        default="png",
-        help="Comma-separated output formats: 'png', 'avif', or both. Default: 'png'.",
-    )
-    fetch_parser.add_argument(
-        "--avif-quality",
-        type=int,
-        default=50,
-        help="AVIF quality (1-100). Lower = smaller files. Default: 50 (optimized for radar images).",
-    )
-    fetch_parser.add_argument(
-        "--avif-speed",
-        type=int,
-        default=6,
-        help="AVIF encoding speed (0-10). Higher = faster but lower quality. "
-        "Default: 6. Use 8+ for CPU-constrained environments.",
-    )
-    fetch_parser.add_argument(
-        "--avif-codec",
-        type=str,
-        choices=["auto", "aom", "svt", "rav1e"],
-        default="auto",
-        help="AVIF codec. 'auto' lets Pillow decide, 'svt' is faster on multi-core. Default: auto.",
-    )
+    add_cache_args(fetch_parser)
+    add_export_format_args(fetch_parser)
 
     # Extent command - generate extent information only
     extent_parser = subparsers.add_parser(
@@ -271,69 +214,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Disable upload to DigitalOcean Spaces (for local development only)",
     )
 
-    # Cache arguments for processed radar data
-    composite_parser.add_argument(
-        "--cache-dir",
-        type=Path,
-        default=Path("/tmp/iradar-data/data"),
-        help="Directory for processed data cache (default: /tmp/iradar-data/data)",
-    )
-    composite_parser.add_argument(
-        "--cache-ttl",
-        type=int,
-        default=60,
-        help="Cache TTL in minutes (default: 60)",
-    )
-    composite_parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable caching entirely",
-    )
-    composite_parser.add_argument(
-        "--no-cache-upload",
-        action="store_true",
-        help="Disable S3 cache sync (local cache only)",
-    )
-    composite_parser.add_argument(
-        "--clear-cache",
-        action="store_true",
-        help="Clear cache before running",
-    )
-
-    # Export format options (same as fetch command)
-    composite_parser.add_argument(
-        "--resolutions",
-        type=str,
-        default="full",
-        help="Comma-separated resolutions to export: 'full' for native, or meters (e.g., '1000,2000'). "
-        "Default: 'full'. Examples: 'full,1000', '1000,2000', 'full'.",
-    )
-    composite_parser.add_argument(
-        "--formats",
-        type=str,
-        default="png",
-        help="Comma-separated output formats: 'png', 'avif', or both. Default: 'png'.",
-    )
-    composite_parser.add_argument(
-        "--avif-quality",
-        type=int,
-        default=50,
-        help="AVIF quality (1-100). Lower = smaller files. Default: 50 (optimized for radar images).",
-    )
-    composite_parser.add_argument(
-        "--avif-speed",
-        type=int,
-        default=6,
-        help="AVIF encoding speed (0-10). Higher = faster but lower quality. "
-        "Default: 6. Use 8+ for CPU-constrained environments.",
-    )
-    composite_parser.add_argument(
-        "--avif-codec",
-        type=str,
-        choices=["auto", "aom", "svt", "rav1e"],
-        default="auto",
-        help="AVIF codec. 'auto' lets Pillow decide, 'svt' is faster on multi-core. Default: auto.",
-    )
+    # Cache and export format arguments (shared with fetch)
+    add_cache_args(composite_parser)
+    add_export_format_args(composite_parser)
 
     # Cache management command
     cache_parser = subparsers.add_parser(
@@ -641,7 +524,7 @@ def fetch_command(args) -> int:
     try:
         from .config.sources import get_source_config, get_source_instance
         from .processing.exporter import MultiFormatExporter
-        from .utils.spaces_uploader import SpacesUploader, is_spaces_configured
+        from .utils.cli_helpers import init_uploader
 
         # Initialize source using centralized registry
         source_config = get_source_config(args.source)
@@ -671,26 +554,7 @@ def fetch_command(args) -> int:
         )
 
         # Initialize DigitalOcean Spaces uploader
-        uploader = None
-        upload_enabled = not args.disable_upload
-
-        if upload_enabled:
-            if is_spaces_configured():
-                try:
-                    uploader = SpacesUploader()
-                    logger.info("DigitalOcean Spaces upload enabled")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize Spaces uploader: {e}")
-                    logger.warning("Falling back to local-only mode (upload disabled)")
-                    upload_enabled = False
-            else:
-                logger.warning(
-                    "DigitalOcean Spaces not configured (missing environment variables)"
-                )
-                logger.warning("Falling back to local-only mode (upload disabled)")
-                upload_enabled = False
-        else:
-            logger.info("Local-only mode (--disable-upload flag used)")
+        uploader = init_uploader(args)
 
         # Set output directory based on source
         if not args.output:
@@ -707,7 +571,7 @@ def fetch_command(args) -> int:
             args.source,
             extent_info,
             force=getattr(args, "update_extent", False),
-            uploader=uploader if upload_enabled else None,
+            uploader=uploader,
         )
 
         logger.info(
@@ -763,7 +627,7 @@ def fetch_command(args) -> int:
                     output_path,
                     args.source,
                     filename,
-                    uploader if upload_enabled else None,
+                    uploader,
                 ):
                     skipped_existing += 1
                 else:
@@ -790,6 +654,7 @@ def fetch_command(args) -> int:
 
             # Process each file to PNG
             processed_count = 0
+            extent = source.get_extent()
             for file_info in files:
                 try:
                     # Extract timestamp for filename
@@ -811,7 +676,6 @@ def fetch_command(args) -> int:
                     radar_data["metadata"]["units"] = "dBZ"
 
                     # Export all variants (full + scaled, PNG + AVIF)
-                    extent = source.get_extent()
                     base_path = output_dir / str(unix_timestamp)
                     variants = exporter.export_variants(
                         radar_data=radar_data,
@@ -825,14 +689,11 @@ def fetch_command(args) -> int:
                     processed_count += 1
 
                     # Upload all variants to DigitalOcean Spaces if enabled
-                    if upload_enabled and uploader:
+                    if uploader:
                         for _variant_name, (variant_path, _) in variants.items():
                             uploader.upload_file(
                                 variant_path, args.source, variant_path.name
                             )
-
-                    # Free large arrays and collect garbage after each file
-                    import gc
 
                     del radar_data
                     gc.collect()
@@ -856,8 +717,6 @@ def fetch_command(args) -> int:
         else:
             # Fetch multiple recent timestamps with cache awareness
             # This handles irregular provider uploads by checking multiple timestamps
-            import gc
-
             from .utils.cli_helpers import init_cache_from_args, output_exists
             from .utils.timestamps import is_timestamp_in_cache
 
@@ -865,7 +724,7 @@ def fetch_command(args) -> int:
             logger.info(f"Fetching up to {reprocess_count} recent timestamps...")
 
             # Initialize cache using shared helper
-            cache = init_cache_from_args(args, upload_enabled)
+            cache = init_cache_from_args(args, uploader is not None)
 
             # Get available timestamps from provider
             # Request extra timestamps (+2) to account for potential gaps or filtering
@@ -929,7 +788,7 @@ def fetch_command(args) -> int:
                         output_path,
                         args.source,
                         filename,
-                        uploader if upload_enabled else None,
+                        uploader,
                     ):
                         skipped_count += 1
                         continue
@@ -961,7 +820,7 @@ def fetch_command(args) -> int:
                     processed_count += 1
 
                     # Upload all variants to DigitalOcean Spaces if enabled
-                    if upload_enabled and uploader:
+                    if uploader:
                         for _variant_name, (variant_path, _) in variants.items():
                             uploader.upload_file(
                                 variant_path, args.source, variant_path.name
@@ -988,7 +847,7 @@ def fetch_command(args) -> int:
                         output_path,
                         args.source,
                         filename,
-                        uploader if upload_enabled else None,
+                        uploader,
                     ):
                         skipped_count += 1
                         continue
@@ -1019,7 +878,7 @@ def fetch_command(args) -> int:
                     logger.info(f"Saved (from cache): {len(variants)} variants")
                     processed_count += 1
 
-                    if upload_enabled and uploader:
+                    if uploader:
                         for _variant_name, (variant_path, _) in variants.items():
                             uploader.upload_file(
                                 variant_path, args.source, variant_path.name

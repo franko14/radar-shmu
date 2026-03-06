@@ -5,12 +5,20 @@ Tests for CLI helper functions.
 Tests the shared CLI helpers used by both fetch and composite commands.
 """
 
+import argparse
+
 import pytest
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from imeteo_radar.utils.cli_helpers import init_cache_from_args, output_exists
+from imeteo_radar.utils.cli_helpers import (
+    add_cache_args,
+    add_export_format_args,
+    init_cache_from_args,
+    init_uploader,
+    output_exists,
+)
 
 
 class TestInitCacheFromArgs:
@@ -194,3 +202,128 @@ class TestOutputExists:
 
         assert result is True
         mock_uploader.file_exists.assert_called_once_with("composite", "1738123400.png")
+
+
+class TestInitUploader:
+    """Tests for init_uploader function."""
+
+    def test_returns_none_when_upload_disabled(self):
+        """Should return None when --disable-upload is set."""
+        args = Namespace(disable_upload=True)
+        result = init_uploader(args)
+        assert result is None
+
+    @patch("imeteo_radar.utils.spaces_uploader.is_spaces_configured", return_value=False)
+    def test_returns_none_when_spaces_not_configured(self, mock_configured):
+        """Should return None when Spaces env vars are missing."""
+        args = Namespace(disable_upload=False)
+        result = init_uploader(args)
+        assert result is None
+
+    @patch("imeteo_radar.utils.spaces_uploader.SpacesUploader")
+    @patch("imeteo_radar.utils.spaces_uploader.is_spaces_configured", return_value=True)
+    def test_returns_uploader_when_configured(self, mock_configured, mock_uploader_class):
+        """Should return SpacesUploader when properly configured."""
+        mock_uploader = MagicMock()
+        mock_uploader_class.return_value = mock_uploader
+        args = Namespace(disable_upload=False)
+
+        result = init_uploader(args)
+
+        assert result == mock_uploader
+
+    @patch("imeteo_radar.utils.spaces_uploader.SpacesUploader", side_effect=Exception("S3 error"))
+    @patch("imeteo_radar.utils.spaces_uploader.is_spaces_configured", return_value=True)
+    def test_returns_none_when_uploader_init_fails(self, mock_configured, mock_uploader_class):
+        """Should return None when SpacesUploader constructor raises."""
+        args = Namespace(disable_upload=False)
+        result = init_uploader(args)
+        assert result is None
+
+    def test_handles_missing_disable_upload_attr(self):
+        """Should default to not disabled when attr is missing."""
+        args = Namespace()  # No disable_upload attr
+        with patch("imeteo_radar.utils.spaces_uploader.is_spaces_configured", return_value=False):
+            result = init_uploader(args)
+        assert result is None
+
+
+class TestAddCacheArgs:
+    """Tests for add_cache_args function."""
+
+    def test_adds_all_cache_arguments(self):
+        """Should add all 5 cache-related arguments."""
+        parser = argparse.ArgumentParser()
+        add_cache_args(parser)
+
+        args = parser.parse_args([])
+        assert hasattr(args, "cache_dir")
+        assert hasattr(args, "cache_ttl")
+        assert hasattr(args, "no_cache")
+        assert hasattr(args, "no_cache_upload")
+        assert hasattr(args, "clear_cache")
+
+    def test_cache_dir_default(self):
+        """Should default cache_dir to /tmp/iradar-data/data."""
+        parser = argparse.ArgumentParser()
+        add_cache_args(parser)
+        args = parser.parse_args([])
+        assert args.cache_dir == Path("/tmp/iradar-data/data")
+
+    def test_cache_ttl_default(self):
+        """Should default cache_ttl to 60."""
+        parser = argparse.ArgumentParser()
+        add_cache_args(parser)
+        args = parser.parse_args([])
+        assert args.cache_ttl == 60
+
+    def test_parses_custom_values(self):
+        """Should parse custom cache argument values."""
+        parser = argparse.ArgumentParser()
+        add_cache_args(parser)
+        args = parser.parse_args(["--cache-ttl", "30", "--no-cache", "--clear-cache"])
+        assert args.cache_ttl == 30
+        assert args.no_cache is True
+        assert args.clear_cache is True
+
+
+class TestAddExportFormatArgs:
+    """Tests for add_export_format_args function."""
+
+    def test_adds_all_format_arguments(self):
+        """Should add all 5 export format arguments."""
+        parser = argparse.ArgumentParser()
+        add_export_format_args(parser)
+
+        args = parser.parse_args([])
+        assert hasattr(args, "resolutions")
+        assert hasattr(args, "formats")
+        assert hasattr(args, "avif_quality")
+        assert hasattr(args, "avif_speed")
+        assert hasattr(args, "avif_codec")
+
+    def test_default_values(self):
+        """Should have correct default values."""
+        parser = argparse.ArgumentParser()
+        add_export_format_args(parser)
+        args = parser.parse_args([])
+        assert args.resolutions == "full"
+        assert args.formats == "png"
+        assert args.avif_quality == 50
+        assert args.avif_speed == 6
+        assert args.avif_codec == "auto"
+
+    def test_parses_custom_format_values(self):
+        """Should parse custom export format values."""
+        parser = argparse.ArgumentParser()
+        add_export_format_args(parser)
+        args = parser.parse_args([
+            "--formats", "png,avif",
+            "--resolutions", "full,1000",
+            "--avif-quality", "75",
+            "--avif-codec", "svt",
+        ])
+        assert args.formats == "png,avif"
+        assert args.resolutions == "full,1000"
+        assert args.avif_quality == 75
+        assert args.avif_codec == "svt"
