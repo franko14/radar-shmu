@@ -5,6 +5,26 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.2] - 2026-03-06
+
+### Changed
+- **Deduplicated CLI code** — extracted shared uploader init, cache args, and export
+  format args into `utils/cli_helpers.py`, reducing maintenance surface across
+  `cli.py` (-141 lines) and `cli_composite.py` (-239 lines)
+- **Use centralized source registry** in composite command — replaced manual if/elif
+  chain with `get_source_instance()`/`get_source_config()` from `config/sources.py`
+- **Cached `get_available_timestamps()` per source** in composite — eliminated 3
+  redundant calls per source during download phase
+
+### Fixed
+- **`source.get_extent()` hoisted above backload loop** — was called on every file
+  iteration instead of once before the loop
+
+### Removed
+- Dead code: `_find_common_timestamp_with_tolerance` (never called, superseded by
+  `_find_multiple_common_timestamps`)
+- Redundant `_export_individual_sources` wrapper (superseded by `_export_single_source`)
+
 ## [2.9.1] - 2026-03-04
 
 ### Fixed
