@@ -20,7 +20,7 @@ Storage Format:
 
 import json
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -299,7 +299,7 @@ class ProcessedDataCache:
             "dimensions": list(data.shape),
             "source_metadata": radar_data.get("metadata", {}),
             "cached_at": time.time(),
-            "cached_at_iso": datetime.utcnow().isoformat() + "Z",
+            "cached_at_iso": datetime.now(UTC).isoformat(),
         }
 
         with open(metadata_path, "w") as f:

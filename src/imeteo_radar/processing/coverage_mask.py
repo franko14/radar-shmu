@@ -31,6 +31,7 @@ from ..config.sources import (
 from ..core.base import lonlat_to_mercator
 from ..core.logging import get_logger
 from ..core.projections import get_crs_web_mercator, get_crs_wgs84
+from ..utils.extent_loader import get_wgs84_from_extent
 
 logger = get_logger(__name__)
 
@@ -58,41 +59,6 @@ def _load_extent_index(output_dir: str) -> dict[str, Any] | None:
     return None
 
 
-def _get_wgs84_from_extent_index(
-    extent_data: dict[str, Any],
-) -> dict[str, float] | None:
-    """
-    Extract WGS84 bounds from extent_index.json data.
-
-    Handles all three known formats:
-    - Composite pipeline: top-level 'wgs84' key
-    - Composite metadata: nested under 'extent.wgs84'
-    - CLI fetch: nested under 'source.extent' (with west/east/south/north)
-
-    Args:
-        extent_data: Parsed extent_index.json data
-
-    Returns:
-        Dictionary with west, east, south, north or None
-    """
-    # Composite pipeline format: top-level "wgs84" key
-    if "wgs84" in extent_data:
-        return extent_data["wgs84"]
-
-    # Composite metadata format: nested under "extent.wgs84"
-    extent = extent_data.get("extent", {})
-    if "wgs84" in extent:
-        return extent["wgs84"]
-
-    # CLI fetch format: nested under "source.extent"
-    source = extent_data.get("source", {})
-    source_extent = source.get("extent", {})
-    if "west" in source_extent:
-        return source_extent
-
-    return None
-
-
 def _load_source_extent(
     source_name: str, output_base_dir: str | None = None
 ) -> dict[str, float] | None:
@@ -113,7 +79,7 @@ def _load_source_extent(
     canonical_dir = os.path.join("/tmp/iradar-data/extent", source_name)
     extent_data = _load_extent_index(canonical_dir)
     if extent_data is not None:
-        result = _get_wgs84_from_extent_index(extent_data)
+        result = get_wgs84_from_extent(extent_data)
         if result is not None:
             return result
 
@@ -124,7 +90,7 @@ def _load_source_extent(
             source_dir = os.path.join(output_base_dir, config["folder"])
             extent_data = _load_extent_index(source_dir)
             if extent_data is not None:
-                return _get_wgs84_from_extent_index(extent_data)
+                return get_wgs84_from_extent(extent_data)
 
     return None
 
@@ -567,7 +533,7 @@ def generate_source_coverage_mask(
         )
         return None
 
-    target_wgs84 = _get_wgs84_from_extent_index(extent_data)
+    target_wgs84 = get_wgs84_from_extent(extent_data)
     if target_wgs84 is None:
         logger.error(
             f"No WGS84 bounds in extent_index.json for {source_name}",
@@ -766,7 +732,7 @@ def generate_composite_coverage_mask(
     metadata = extent_info.get("metadata", {})
     resolution_m = metadata.get("resolution_m", resolution_m)
 
-    mask_extent = _get_wgs84_from_extent_index(extent_info)
+    mask_extent = get_wgs84_from_extent(extent_info)
     if mask_extent is None:
         logger.error("No WGS84 bounds in composite extent_index.json")
         return None

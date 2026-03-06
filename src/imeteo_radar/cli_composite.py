@@ -235,10 +235,7 @@ def composite_command_impl(args: Any) -> int:
         logger.warning("Interrupted by user")
         return 1
     except Exception as e:
-        logger.error(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Error: {e}", exc_info=True)
         return 1
 
 
@@ -895,10 +892,10 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
             gc.collect()
 
         except Exception as e:
-            logger.error(f"Failed to create composite for {common_timestamp}: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(
+                f"Failed to create composite for {common_timestamp}: {e}",
+                exc_info=True,
+            )
 
     # Update extent index if processed any composites
     if processed_count > 0:
@@ -1533,10 +1530,7 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
             gc.collect()
 
         except Exception as e:
-            logger.error(f"Failed to create composite: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(f"Failed to create composite: {e}", exc_info=True)
 
     logger.info(
         f"Processed {processed_count} composites", extra={"count": processed_count}

@@ -208,10 +208,7 @@ class RadarCompositor:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to merge {source_name}: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(f"Failed to merge {source_name}: {e}", exc_info=True)
             return False
 
     def _get_source_crs_and_transform(
