@@ -11,7 +11,7 @@ Documentation: https://meteo.arso.gov.si/uploads/meteo/help/sl/SRD3Format.html
 
 import os
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -394,7 +394,7 @@ class ARSORadarSource(RadarSource):
             )
         else:
             logger.debug(
-                f"ARSO: Latest timestamp doesn't match any requested timestamps",
+                "ARSO: Latest timestamp doesn't match any requested timestamps",
                 extra={"source": "arso"},
             )
 
@@ -452,13 +452,13 @@ class ARSORadarSource(RadarSource):
                         timestamp = f"{time_parts[0]:04d}{time_parts[1]:02d}{time_parts[2]:02d}{time_parts[3]:02d}{time_parts[4]:02d}00"
                     else:
                         # Fallback to current time
-                        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M00")
+                        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M00")
                     result["timestamp"] = timestamp
                 except Exception as e:
                     logger.warning(
                         f"Could not parse timestamp: {e}", extra={"source": "arso"}
                     )
-                    result["timestamp"] = datetime.utcnow().strftime("%Y%m%d%H%M00")
+                    result["timestamp"] = datetime.now(UTC).strftime("%Y%m%d%H%M00")
 
                 downloaded_files.append(result)
                 if result["cached"]:
@@ -500,7 +500,7 @@ class ARSORadarSource(RadarSource):
             if isinstance(time_parts, list) and len(time_parts) >= 5:
                 timestamp = f"{time_parts[0]:04d}{time_parts[1]:02d}{time_parts[2]:02d}{time_parts[3]:02d}{time_parts[4]:02d}00"
             else:
-                timestamp = datetime.utcnow().strftime("%Y%m%d%H%M00")
+                timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M00")
 
             # Determine product type from filename or header
             domain = header.get("domain", "SI0")

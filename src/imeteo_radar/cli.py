@@ -1110,10 +1110,7 @@ def coverage_mask_command(args) -> int:
         logger.error(f"Import error: {e}")
         return 1
     except Exception as e:
-        logger.error(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Error: {e}", exc_info=True)
         return 1
 
 
@@ -1169,10 +1166,7 @@ def cache_command(args) -> int:
             return 1
 
     except Exception as e:
-        logger.error(f"Cache command error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Cache command error: {e}", exc_info=True)
         return 1
 
 
@@ -1285,10 +1279,7 @@ def transform_cache_command(args) -> int:
         logger.error(f"Import error: {e}")
         return 1
     except Exception as e:
-        logger.error(f"Transform cache command error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Transform cache command error: {e}", exc_info=True)
         return 1
 
 

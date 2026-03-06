@@ -146,9 +146,6 @@ def get_color_for_dbz(dbz_value):
     return cmap(norm_value)
 
 
-# For backward compatibility
-create_discrete_colormap = get_shmu_colormap
-
 if __name__ == "__main__":
     logger.info("SHMU Official Radar Colormap")
 

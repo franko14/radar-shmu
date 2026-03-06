@@ -5,10 +5,12 @@ This module creates GIF animations from radar PNG sequences for SHMU, DWD, and m
 Supports multiple products per source and handles different timestamp formats.
 """
 
-import logging
 import re
+import warnings
 from datetime import datetime
 from pathlib import Path
+
+from ..core.logging import get_logger
 
 try:
     from PIL import Image
@@ -16,16 +18,12 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
-    import sys
-
-    print(
-        "Warning: PIL (Pillow) not available. Install with: pip install Pillow",
-        file=sys.stderr,
+    warnings.warn(
+        "PIL (Pillow) not available. Install with: pip install Pillow",
+        stacklevel=2,
     )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RadarAnimator:

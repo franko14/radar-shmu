@@ -710,7 +710,3 @@ class MultiFormatExporter:
                 f"Unknown data type (units: {units}, quantity: {quantity}), using SHMU colormap",
             )
             return {"name": "reflectivity_shmu", **self.colormaps["reflectivity_shmu"]}
-
-
-# Backward compatibility alias
-PNGExporter = MultiFormatExporter

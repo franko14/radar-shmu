@@ -10,7 +10,7 @@ Handles conversion between different coordinate systems including:
 """
 
 import warnings
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -31,7 +31,7 @@ class ProjectionHandler:
     def __init__(self):
         self.transformers = {}  # Cache transformers for efficiency
 
-    def create_transformer(self, src_crs: str, dst_crs: str) -> Optional["Transformer"]:
+    def create_transformer(self, src_crs: str, dst_crs: str) -> "Transformer | None":
         """Create and cache a coordinate transformer"""
         if not PYPROJ_AVAILABLE:
             warnings.warn(
