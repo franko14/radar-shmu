@@ -5,6 +5,35 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.3] - 2026-03-06 ([#33](https://github.com/franko14/radar-shmu/pull/33), [#34](https://github.com/franko14/radar-shmu/pull/34), [#36](https://github.com/franko14/radar-shmu/pull/36))
+
+### Changed
+- **Simplified `export_variants()` API** — reduced from 8 parameters to 4 by absorbing
+  `colormap_type` and `reproject` into `ExportConfig` dataclass; uses `dataclasses.replace()`
+  for immutable config overrides in composite pipeline
+- **Removed redundant S3 HEAD check** from transform cache hot path — `_ensure_in_s3()`
+  was issuing an S3 HEAD request on every local cache hit; S3 upload now only on initial compute
+- **Removed `sync_with_s3()`** from default composite flow — was running an expensive
+  S3 paginator on every composite run
+- **Guaranteed numpy array cleanup** in compositor — wrapped reprojected arrays in
+  `try/finally` for deterministic memory release
+- **Avoided redundant `float32` copies** in compositor and reprojector — skip
+  `astype(np.float32)` when data is already float32
+
+### Fixed
+- **DWD cached timestamp parsing** — timestamps with underscore format (`YYYYMMDD_HHMM`)
+  were truncated by `[:12]`, losing the last minute digit; now normalizes by stripping
+  underscores before parsing
+
+### Removed
+- Unused `export_png()` wrapper method from exporter (56 lines, never called externally)
+- Unused coordinate arrays (`_lons`, `_lats`) from SHMU, CHMI, IMGW, and OMSZ sources
+
+### Documentation
+- Updated docs to reflect current API (`export_variants`, `ExportConfig`, `MultiFormatExporter`)
+- Updated Python requirement to 3.11+, tooling references to ruff
+- Added current memory safeguards to profiling results
+
 ## [2.9.2] - 2026-03-06 ([#31](https://github.com/franko14/radar-shmu/pull/31), [#32](https://github.com/franko14/radar-shmu/pull/32))
 
 ### Changed
