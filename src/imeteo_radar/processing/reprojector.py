@@ -75,8 +75,9 @@ def reproject_to_web_mercator(
     reprojected = np.full((dst_height, dst_width), np.nan, dtype=np.float32)
 
     # Perform reprojection
+    source_f32 = data if data.dtype == np.float32 else data.astype(np.float32)
     reproject(
-        source=data.astype(np.float32),
+        source=source_f32,
         destination=reprojected,
         src_transform=native_transform,
         src_crs=native_crs,

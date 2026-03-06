@@ -387,9 +387,6 @@ class IMGWRadarSource(RadarSource):
                     ll_lon, ll_lat = 13.0, 48.1
                     ur_lon, ur_lat = 26.4, 56.2
 
-                _lons = np.linspace(ll_lon, ur_lon, data.shape[1])
-                _lats = np.linspace(ur_lat, ll_lat, data.shape[0])  # Note: flipped
-
                 # Extract metadata
                 product = what_attrs.get("product", "MAX")
                 quantity = what_attrs.get("quantity", "DBZH")

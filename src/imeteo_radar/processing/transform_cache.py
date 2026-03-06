@@ -244,10 +244,6 @@ class TransformCache:
             if grid:
                 self._memory_cache[cache_key] = grid
                 logger.debug(f"Transform cache hit (disk): {source_name}")
-
-                # Ensure grid is also in S3 (upload if missing)
-                self._ensure_in_s3(cache_key, grid)
-
                 return grid
 
         # Tier 3: S3 cache (slower but persistent)
@@ -501,31 +497,6 @@ class TransformCache:
             logger.debug(f"Saved transform cache to {local_path}")
         except Exception as e:
             logger.warning(f"Failed to save transform cache to {local_path}: {e}")
-
-    def _ensure_in_s3(self, cache_key: str, grid: TransformGrid) -> None:
-        """Ensure transform grid exists in S3, uploading if missing.
-
-        This handles the case where a grid exists locally but not in S3
-        (e.g., from before S3 upload was implemented).
-        """
-        uploader = self._get_uploader()
-        if not uploader:
-            return
-
-        s3_key = self._get_s3_key(cache_key)
-
-        try:
-            # Check if exists in S3
-            uploader.s3_client.head_object(Bucket=uploader.bucket, Key=s3_key)
-            # Already exists, nothing to do
-        except Exception as e:
-            # Check if it's a 404 (not found)
-            error_code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if error_code == "404":
-                # Not in S3, upload it
-                logger.info(f"Uploading local grid to S3: {grid.source_name}")
-                self._save_to_s3(cache_key, grid)
-            # Other errors are ignored (logged in _save_to_s3 if upload fails)
 
     def _try_load_from_s3(self, cache_key: str) -> TransformGrid | None:
         """Try to load transform grid from S3.

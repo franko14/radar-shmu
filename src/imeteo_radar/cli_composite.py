@@ -6,6 +6,7 @@ Separated into its own module to keep cli.py manageable.
 """
 
 import gc
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -374,15 +375,6 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
         ensure_mask_exists(source_name)
     ensure_extent_exists("composite")
     ensure_mask_exists("composite")
-
-    # Ensure transform grids are synced with S3 (download missing, upload local-only)
-    # Skip when --no-individual: transform cache is only used for individual source exports,
-    # the compositor uses rasterio.warp.reproject() directly
-    if not args.no_individual:
-        from .processing.transform_cache import TransformCache
-
-        transform_cache = TransformCache()
-        transform_cache.sync_with_s3()
 
     # ========== STEP 1: DOWNLOAD DATA FROM ALL SOURCES ==========
     logger.info("Downloading data from all sources...")
@@ -859,13 +851,12 @@ def _process_latest(args, sources, exporter, export_config, output_dir, uploader
             # Composite data is already in Web Mercator, no reprojection needed
             # Export all variants (full + scaled, PNG + AVIF)
             base_path = output_dir / str(unix_timestamp)
+            composite_config = replace(export_config, reproject=False, colormap_type="shmu")
             variants = exporter.export_variants(
                 radar_data=radar_data_for_export,
                 output_base_path=base_path,
                 extent={"wgs84": composite["extent"]},
-                config=export_config,
-                colormap_type="shmu",
-                reproject=False,  # Already in Web Mercator
+                config=composite_config,
             )
 
             logger.info(
@@ -1036,8 +1027,6 @@ def _export_single_source(
         output_base_path=base_path,
         extent=radar_data["extent"],
         config=export_config,
-        colormap_type="shmu",
-        reproject=True,  # Reproject to EPSG:3857 for proper positioning
     )
 
     # Get the REPROJECTED bounds from export metadata (not native bounds)
@@ -1498,13 +1487,12 @@ def _process_backload(args, sources, exporter, export_config, output_dir, upload
             # Composite data is already in Web Mercator, no reprojection needed
             # Export all variants (full + scaled, PNG + AVIF)
             base_path = output_dir / str(unix_timestamp)
+            composite_config = replace(export_config, reproject=False, colormap_type="shmu")
             variants = exporter.export_variants(
                 radar_data=radar_data_for_export,
                 output_base_path=base_path,
                 extent={"wgs84": composite["extent"]},
-                config=export_config,
-                colormap_type="shmu",
-                reproject=False,  # Already in Web Mercator
+                config=composite_config,
             )
 
             logger.info(f"Composite saved: {len(variants)} variants")
