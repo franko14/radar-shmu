@@ -377,6 +377,7 @@ Precomputed pixel-to-pixel index mappings stored in a three-tier cache for fast 
 
 - Uses int16 indices (~4 bytes/pixel) for memory efficiency
 - `fast_reproject()` applies precomputed grid via numpy array indexing
+- S3 upload happens **only on initial grid compute** — no redundant S3 HEAD checks on cache hits (optimized in v2.9.3)
 
 **Implementation**: `src/imeteo_radar/processing/transform_cache.py`
 
@@ -421,7 +422,7 @@ rgba = lut[indices]  # Direct lookup
 
 **Problem**: Creating 4800×4400 coordinate meshgrids (322 MB) that are never used after extent calculation.
 
-**Solution**: Calculate extent from 4 corner coordinates only.
+**Solution**: Calculate extent from 4 corner coordinates only. Unused `np.linspace()` coordinate arrays were also removed from SHMU, CHMI, IMGW, and OMSZ sources (v2.9.3).
 
 ```python
 # Before: 322 MB
@@ -502,7 +503,7 @@ SHMU and CHMI data is already in Web Mercator (EPSG:3857).
 
 Coordinate extraction:
 1. Read corner coordinates from HDF5 `where` attributes
-2. Create 1D linspace arrays for x and y
+2. Build affine transform from corner coordinates and grid dimensions
 3. No reprojection needed for single-source export
 
 ---
@@ -526,7 +527,7 @@ graph LR
         end
 
         subgraph processing/
-            EXP[exporter.py<br/>PNG export + reproject]
+            EXP[exporter.py<br/>Multi-format export + reproject]
             COMP[compositor.py<br/>Multi-source merge]
             REPR[reprojector.py<br/>Unified reprojection]
             TCACHE[transform_cache.py<br/>Three-tier cache]
@@ -587,7 +588,8 @@ graph LR
 
 ### Export
 
-- **Method**: PIL with pre-computed LUT
+- **Method**: PIL with pre-computed uint8 LUT colormap
+- **API**: `export_variants()` with `ExportConfig` dataclass (formats, resolutions, colormap, reproject flag)
 - **Compression**: Maximum PNG level 9
 - **Speed**: 4-10x faster than matplotlib
 

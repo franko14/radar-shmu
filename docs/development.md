@@ -6,7 +6,7 @@ Set up your development environment and contribute to iMeteo Radar.
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.11+ (uses `datetime.UTC` and modern type annotations)
 - Git
 - Docker (optional, for testing)
 
@@ -37,8 +37,8 @@ pip install -e ".[dev]"
 ```
 
 This installs:
-- Core dependencies (numpy, h5py, rasterio, matplotlib, requests, PIL, opencv-python, pyproj, netCDF4)
-- Development tools (pytest, black, isort, mypy, flake8)
+- Core dependencies (numpy, h5py, rasterio, requests, PIL, pyproj, netCDF4, python-dotenv)
+- Development tools (pytest, ruff, mypy)
 
 ### 4. Verify Installation
 
@@ -67,7 +67,7 @@ graph TB
             end
 
             subgraph processing["processing/"]
-                EXP["exporter.py - PNG export + reproject"]
+                EXP["exporter.py - Multi-format export + reproject"]
                 COMP["compositor.py - Multi-source merge"]
                 REPR["reprojector.py - Unified reprojection"]
                 TCACHE["transform_cache.py - Three-tier cache"]
@@ -132,26 +132,20 @@ pytest -v -s  # Show print statements
 
 ## Code Quality
 
-### Formatting (Black)
+### Linting & Formatting (ruff)
 
 ```bash
-# Check formatting
-black --check src/
+# Check for lint issues
+ruff check src/
 
-# Apply formatting
-black src/
-```
+# Auto-fix lint issues
+ruff check --fix src/
 
-Configuration: 88 character line length (default)
+# Format code
+ruff format src/
 
-### Import Sorting (isort)
-
-```bash
-# Check imports
-isort --check-only src/
-
-# Sort imports
-isort src/
+# Check formatting without applying
+ruff format --check src/
 ```
 
 ### Type Checking (mypy)
@@ -160,16 +154,10 @@ isort src/
 mypy src/
 ```
 
-### Linting (flake8)
-
-```bash
-flake8 src/
-```
-
 ### Run All Checks
 
 ```bash
-black src/ && isort src/ && mypy src/ && flake8 src/
+ruff check src/ && ruff format --check src/ && mypy src/
 ```
 
 ---
@@ -230,19 +218,23 @@ class NewSourceRadarSource(RadarSource):
         pass
 ```
 
-### 2. Add to CLI
+### 2. Register in Source Registry
 
-Update `src/imeteo_radar/cli.py`:
+Update `src/imeteo_radar/config/sources.py`:
 
 ```python
-# Add to source choices
-parser.add_argument('--source', choices=['dwd', 'shmu', 'chmi', 'newsource'])
-
-# Add to fetch_command
-if args.source == 'newsource':
-    from .sources.newsource import NewSourceRadarSource
-    source = NewSourceRadarSource()
+# Add to SOURCE_REGISTRY
+"newsource": SourceConfig(
+    name="newsource",
+    country="newcountry",
+    folder="newcountry",
+    source_class="NewSourceRadarSource",
+    source_module="imeteo_radar.sources.newsource",
+    product="maxz",
+),
 ```
+
+The CLI automatically picks up sources from the registry — no manual if/elif chains needed.
 
 ### 3. Add Tests
 
