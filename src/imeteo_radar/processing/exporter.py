@@ -20,7 +20,7 @@ from ..core.logging import get_logger
 logger = get_logger(__name__)
 
 # Minimum DBZ value to render — pixels below this threshold are transparent
-MIN_RENDER_DBZ = -30
+MIN_RENDER_DBZ = 10
 
 
 @dataclass
