@@ -19,6 +19,9 @@ from ..core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Minimum DBZ value to render — pixels below this threshold are transparent
+MIN_RENDER_DBZ = -30
+
 
 @dataclass
 class ExportConfig:
@@ -240,7 +243,7 @@ class MultiFormatExporter:
 
         # Map data values to LUT indices (0-255)
         # Handle NaN/invalid values separately
-        valid_mask = np.isfinite(data)
+        valid_mask = np.isfinite(data) & (data >= MIN_RENDER_DBZ)
 
         # Clip and scale valid data to 0-255 index range
         indices = np.zeros(data.shape, dtype=np.uint8)
