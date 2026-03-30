@@ -5,6 +5,12 @@ All notable changes to iMeteo Radar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.4] - 2026-03-30 ([#37](https://github.com/franko14/radar-shmu/pull/37))
+
+### Fixed
+- **DBZ render threshold** — pixels below `MIN_RENDER_DBZ = -30` dBZ are now rendered
+  as fully transparent instead of being colored; suppresses sub-threshold noise in output images
+
 ## [2.9.3] - 2026-03-06 ([#33](https://github.com/franko14/radar-shmu/pull/33), [#34](https://github.com/franko14/radar-shmu/pull/34), [#36](https://github.com/franko14/radar-shmu/pull/36))
 
 ### Changed
